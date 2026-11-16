@@ -147,7 +147,7 @@ class LabelReader:
         "model (Modell-/Teilenummer), capacity (z.B. '1TB' oder '16GB'), "
         "speed (z.B. 'PC4-3200AA' oder '7200rpm', sonst null), type ('HDD'|'optical'|'RAM'|null), "
         "raw_text (der gesamte lesbare Text auf dem Etikett). Unbekannte Felder = null. "
-        "Antworte ausschliesslich mit dem JSON, ohne Erklaerung. Überprüfe, ob die Werte plausibel sind."
+        "Antworte ausschliesslich mit dem JSON, ohne Erklaerung. Überprüfe, ob die Werte plausibel sind, vergleiche insbesondere Hersteller und Modellnummer, und korrigiere offensichtliche OCR-Fehler (z.B. 'O' vs. '0', 'I' vs. '1')."
     )
 
     def _openai_fields(self, img: np.ndarray) -> dict:
