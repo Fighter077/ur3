@@ -1,5 +1,18 @@
 import { ChangeDetectorRef, Component, ElementRef, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { MatToolbarModule } from '@angular/material/toolbar';
+import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
+import { MatCardModule } from '@angular/material/card';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatSelectModule } from '@angular/material/select';
+import { MatProgressBarModule } from '@angular/material/progress-bar';
+import { MatTableModule } from '@angular/material/table';
+import { MatChipsModule } from '@angular/material/chips';
+import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatDividerModule } from '@angular/material/divider';
+import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { RobotService } from './services/robot.service';
 import { Analysis, Hand, InspectionState, InventoryRecord, RobotState, SimState } from './interfaces';
 
@@ -16,7 +29,12 @@ const HAND_EDGES: [number, number][] = [
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule],
+  imports: [
+    CommonModule, FormsModule,
+    MatToolbarModule, MatButtonModule, MatIconModule, MatCardModule,
+    MatFormFieldModule, MatSelectModule, MatProgressBarModule, MatTableModule,
+    MatChipsModule, MatTooltipModule, MatDividerModule, MatSnackBarModule,
+  ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss',
 })
@@ -34,6 +52,7 @@ export class AppComponent implements OnInit, OnDestroy {
   partType = 'HDD';
   jogSpeed = 0.03;
   poseNames = ['home', 'holder', 'holder_up', 'front', 'back', 'collection'];
+  invColumns = ['id', 'type', 'manufacturer', 'model', 'capacity', 'status', 'images', 'actions'];
 
   // Virtueller Greifer – Zielwerte (vom Backend) und weich interpolierte Istwerte.
   hasSim = false;
@@ -43,7 +62,12 @@ export class AppComponent implements OnInit, OnDestroy {
   handoverProgress = 0; handoverActive = false;
   private raf = 0;
 
-  constructor(private svc: RobotService, private zone: NgZone, private cdr: ChangeDetectorRef) {
+  constructor(
+    private svc: RobotService,
+    private zone: NgZone,
+    private cdr: ChangeDetectorRef,
+    private snack: MatSnackBar,
+  ) {
     this.svc.connectionState$.subscribe((s) => {
       this.connectionState = s;
       this.connected = s === 'connected';
@@ -52,6 +76,20 @@ export class AppComponent implements OnInit, OnDestroy {
     this.svc.analysis$.subscribe((a) => this.onAnalysis(a));
     this.svc.inspection$.subscribe((i) => (this.inspection = i));
     this.svc.inventory$.subscribe((inv) => (this.inventory = inv));
+    this.svc.ack$.subscribe((a) => this.onAck(a));
+  }
+
+  private onAck(a: any) {
+    if (!a) return;
+    if (a.action === 'teach_pose') {
+      const r = a.result || {};
+      this.snack.open(r.ok ? `Pose „${r.name}" gespeichert` : `Teach fehlgeschlagen: ${r.error || ''}`,
+        'OK', { duration: 2500 });
+    } else if (a.action === 'start_inspection' && !a.ok) {
+      this.snack.open(`Start nicht möglich: ${a.result?.error || ''}`, 'OK', { duration: 2500 });
+    } else if (a.ok === false && a.error) {
+      this.snack.open(`Fehler: ${a.error}`, 'OK', { duration: 2500 });
+    }
   }
 
   ngOnInit() {

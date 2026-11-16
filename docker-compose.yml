@@ -1,0 +1,38 @@
+# Compose-Projekt "ur3" – gruppiert Backend + Frontend als EIN Stack (z. B. in Podman Desktop).
+#
+# Starten:  podman compose up -d --build      (oder in Podman Desktop: Compose -> auswählen)
+# Stoppen:  podman compose down
+#
+# Wichtig: das Backend läuft mit network_mode: host, damit der WebRTC-/UDP-Medienstrom
+# traversiert (derselbe Grund wie im Skript). Deshalb hat es KEIN ports:-Mapping – es
+# bindet direkt Host-Port 8080. Das Frontend wird klassisch auf 4200 gemappt.
+#
+# Alternative ohne Compose: ./scripts/podman-up.sh (macht dasselbe per podman run).
+name: ur3
+
+services:
+  backend:
+    build: ./backend
+    image: localhost/ur3-backend:latest
+    container_name: ur3-backend
+    network_mode: host          # WebRTC/UDP -> echtes Host-Netz
+    restart: unless-stopped
+    environment:
+      - ROBOT_MOCK=${ROBOT_MOCK:-true}
+      - ROBOT_IP=${ROBOT_IP:-192.168.1.100}
+      - YOLO_DEVICE=${YOLO_DEVICE:-cpu}
+      - GRIPPER_TYPE=${GRIPPER_TYPE:-none}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend/models:/app/models:z   # Modelle (YOLO/Hand) – persistent, nicht im Image
+      - ./backend/data:/app/data:z       # Inventar (DPP), Label-Bilder, geteachte poses.json
+
+  frontend:
+    build: ./frontend
+    image: localhost/ur3-frontend:latest
+    container_name: ur3-frontend
+    restart: unless-stopped
+    ports:
+      - "4200:80"
+    depends_on:
+      - backend

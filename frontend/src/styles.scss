@@ -1,3 +1,28 @@
+@use '@angular/material' as mat;
+
+// Self-hosted Google Fonts (keine externe CDN) – wie in chessButBetterV2:
+// .woff2 unter src/assets/google/, @font-face in diesen Partials.
+@use 'styles/roboto.scss';
+@use 'styles/material-icons.scss';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+// Angular Material 19 – dunkles Theme (Design-Tokens für alle mat-* Komponenten).
+html {
+  @include mat.theme((
+    color: (
+      theme-type: dark,
+      primary: mat.$azure-palette,
+      tertiary: mat.$cyan-palette,
+    ),
+    typography: Roboto,
+    density: 0,
+  ));
+}
+
+// Akzentfarben fürs SVG-Overlay (Hand/Greifer) und ein paar Custom-Stellen.
 :root {
   --bg: #0f1419;
   --panel: #1a222c;
@@ -12,27 +37,10 @@
 }
 
 * { box-sizing: border-box; }
-
+html, body { height: 100%; }
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-family: Roboto, system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
-
-button {
-  font-family: inherit;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
-  transition: background 0.15s, border-color 0.15s;
-}
-button:hover:not(:disabled) { background: #2c3a48; border-color: var(--accent); }
-button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
-button.ok { background: var(--ok); border-color: var(--ok); color: #06250f; }

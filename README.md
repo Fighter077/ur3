@@ -40,13 +40,16 @@ Software:                         Frame-Capture ──▶ OCR ──▶ Inventar
 ## Schnellstart (Podman)
 
 ```bash
-cp .env.example .env        # ggf. ROBOT_MOCK / TRIGGER_GESTURE anpassen
-./scripts/podman-up.sh      # baut + startet Backend (host-net) + Frontend
+cp .env.example .env               # ggf. ROBOT_MOCK / TRIGGER_GESTURE anpassen
+podman compose up -d --build       # Projekt "ur3": Backend (host-net) + Frontend
 ```
+
+In **Podman Desktop** erscheint das als ein gruppiertes Projekt „ur3 (compose)".
+Alternativ ohne Compose: `./scripts/podman-up.sh` (startet dieselben Container per `podman run`).
 
 - Frontend: <http://localhost:4200>
 - Backend-Health: <http://localhost:8080/health>
-- Logs: `podman logs -f ur3-backend` · Stoppen: `./scripts/podman-down.sh`
+- Logs: `podman compose logs -f backend` · Stoppen: `podman compose down`
 
 Standard: **Simulation** (`ROBOT_MOCK=true`) – komplett ohne UR3e testbar. Der Inspektionszyklus
 läuft dann mit simulierten Bewegungen; ohne Kamera entstehen Datensätze ohne Bild (`review`).
@@ -55,10 +58,10 @@ läuft dann mit simulierten Bewegungen; ohne Kamera entstehen Datensätze ohne B
 **[docs/REAL_ROBOT.md](docs/REAL_ROBOT.md)** (Netzwerk, Remote Control, Posen teachen, Greifer,
 Kamera, sicherer Erstlauf).
 
-> **Warum Podman statt Docker Desktop / compose?** Der WebRTC-Medienstrom läuft über **UDP**;
-> Docker Desktop (Linux-VM) lässt UDP nicht durch → Verbindung bleibt auf „connecting". Rootless
-> Podman nutzt das echte Host-Netz (`--network=host`). Eine `docker-compose.yml` gibt es bewusst
-> nicht (siehe `scripts/podman-up.sh`).
+> **Warum Podman (nicht Docker Desktop)?** Der WebRTC-Medienstrom läuft über **UDP**; Docker Desktop
+> (Linux-VM) lässt UDP nicht durch → Verbindung bleibt auf „connecting". Rootless Podman nutzt das
+> echte Host-Netz, deshalb hat der `backend`-Service `network_mode: host`. Compose läuft über
+> **`podman compose`** (nutzt den Podman-Socket) – **nicht** über Docker Desktops `docker compose`.
 
 ## Bedienung
 

@@ -1,161 +1,212 @@
-<div class="app">
-  <header>
-    <h1>UR3 · Inspektion & Dokumentation</h1>
-    <div class="status">
-      <span class="dot" [class.on]="connected"></span>
-      {{ connectionState }}
-      <span *ngIf="robot?.mock" class="badge">SIM</span>
-      <button class="primary" (click)="toggleConnection()">
-        {{ connected || connectionState === 'verbinde…' ? 'Trennen' : 'Verbinden' }}
-      </button>
-      <button class="danger" (click)="estop()" [disabled]="!connected">■ NOT-HALT</button>
-    </div>
-  </header>
+<mat-toolbar color="primary" class="!h-auto flex-wrap gap-2 py-2">
+  <mat-icon>precision_manufacturing</mat-icon>
+  <span class="font-medium">UR3 · Inspektion &amp; Dokumentation</span>
+  <span class="flex-1"></span>
+  <span class="flex items-center gap-2 text-sm">
+    <span class="inline-block w-2.5 h-2.5 rounded-full"
+          [style.background]="connected ? 'var(--ok)' : 'var(--danger)'"></span>
+    {{ connectionState }}
+  </span>
+  <span *ngIf="robot?.mock" class="text-xs font-bold px-2 py-0.5 rounded"
+        style="background: var(--warn); color: #231a00;">SIM</span>
+  <button mat-flat-button (click)="toggleConnection()">
+    <mat-icon>{{ connected ? 'link_off' : 'link' }}</mat-icon>
+    {{ connected || connectionState === 'verbinde…' ? 'Trennen' : 'Verbinden' }}
+  </button>
+  <button mat-flat-button color="warn" (click)="estop()" [disabled]="!connected">
+    <mat-icon>pan_tool</mat-icon> NOT-HALT
+  </button>
+</mat-toolbar>
 
-  <main>
-    <!-- Linke Spalte: Kamera + Geste -->
-    <section class="panel video">
-      <h2>Kamera & Geste</h2>
-      <div class="video-wrap">
-        <video #video autoplay playsinline muted></video>
+<div class="max-w-[1400px] mx-auto p-4">
+  <div class="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4">
 
-        <!-- Overlay: Hand/Finger + simulierter Greifer -->
-        <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" *ngIf="analysis">
-          <!-- Hände -->
-          <g *ngFor="let h of analysis.hands" class="hand">
-            <line *ngFor="let l of handLines(h)"
-              [attr.x1]="l.x1" [attr.y1]="l.y1" [attr.x2]="l.x2" [attr.y2]="l.y2" />
-            <circle *ngFor="let p of handDots(h)"
-              [attr.cx]="p.x" [attr.cy]="p.y" [attr.r]="p.tip ? 0.8 : 0.5" [class.tip]="p.tip" />
-          </g>
-
-          <!-- Simulierter Roboter-Greifer -->
-          <g class="gripper" *ngIf="hasSim" [class.holding]="gHolding" [class.handover]="gMode === 'handover'">
-            <line class="arm" [attr.x1]="grip.x" y1="0" [attr.x2]="grip.x" [attr.y2]="grip.armY2" />
-            <rect class="wrist" [attr.x]="grip.wristX" [attr.y]="grip.wristY"
-                  [attr.width]="grip.wristW" [attr.height]="grip.wristH" rx="1" />
-            <line class="jaw" [attr.x1]="grip.jawLX" [attr.y1]="grip.jawBaseY" [attr.x2]="grip.leftTipX" [attr.y2]="grip.tipY" />
-            <line class="jaw" [attr.x1]="grip.jawRX" [attr.y1]="grip.jawBaseY" [attr.x2]="grip.rightTipX" [attr.y2]="grip.tipY" />
-            <circle class="tip" [attr.cx]="grip.leftTipX" [attr.cy]="grip.tipY" r="0.6" />
-            <circle class="tip" [attr.cx]="grip.rightTipX" [attr.cy]="grip.tipY" r="0.6" />
-            <rect class="part" *ngIf="gHolding" [attr.x]="grip.partX" [attr.y]="grip.partY" width="5.2" height="3.6" rx="0.6" />
-            <text class="part-label" *ngIf="gHolding" [attr.x]="grip.x" [attr.y]="grip.labelY">{{ partType }}</text>
-            <text class="grip-action" [attr.x]="grip.actionX" [attr.y]="grip.actionY">{{ gAction }}</text>
-          </g>
-        </svg>
-      </div>
-
-      <!-- Übergabe -->
-      <div class="trigger" [class.on]="handoverActive">
-        <div class="trigger-head">
-          <span>Simulierter Roboter: <strong>{{ gAction }}</strong></span>
-          <span class="muted" *ngIf="analysis">{{ analysis.fps.toFixed(0) }} FPS</span>
-        </div>
-        <div class="bar"><div class="fill" [style.width.%]="handoverProgress * 100"></div></div>
-        <p class="muted">
-          Bauteil in die offene Hand nehmen und sie in die Kamera halten – der Greifer kommt,
-          übernimmt das Teil und startet den Inspektionszyklus. (Oder rechts „Zyklus starten".)
-        </p>
-      </div>
-    </section>
-
-    <!-- Rechte Spalte: Inspektion + Telemetrie -->
-    <section class="panel control">
-      <h2>Inspektionszyklus</h2>
-      <div class="cycle">
-        <label>Bauteiltyp</label>
-        <div class="row">
-          <select [disabled]="cycleRunning" (change)="partType = $any($event.target).value">
-            <option *ngFor="let p of partTypes" [value]="p" [selected]="p === partType">{{ p }}</option>
-          </select>
-          <button class="primary" (click)="startInspection()" [disabled]="!connected || cycleRunning">
-            ▶ Zyklus starten
-          </button>
+    <!-- Kamera & Geste -->
+    <mat-card appearance="outlined">
+      <mat-card-header><mat-card-title>Kamera &amp; Geste</mat-card-title></mat-card-header>
+      <mat-card-content>
+        <div class="video-wrap">
+          <video #video autoplay playsinline muted></video>
+          <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" *ngIf="analysis">
+            <g *ngFor="let h of analysis.hands" class="hand">
+              <line *ngFor="let l of handLines(h)"
+                [attr.x1]="l.x1" [attr.y1]="l.y1" [attr.x2]="l.x2" [attr.y2]="l.y2" />
+              <circle *ngFor="let p of handDots(h)"
+                [attr.cx]="p.x" [attr.cy]="p.y" [attr.r]="p.tip ? 0.8 : 0.5" [class.tip]="p.tip" />
+            </g>
+            <g class="gripper" *ngIf="hasSim" [class.holding]="gHolding" [class.handover]="gMode === 'handover'">
+              <line class="arm" [attr.x1]="grip.x" y1="0" [attr.x2]="grip.x" [attr.y2]="grip.armY2" />
+              <rect class="wrist" [attr.x]="grip.wristX" [attr.y]="grip.wristY"
+                    [attr.width]="grip.wristW" [attr.height]="grip.wristH" rx="1" />
+              <line class="jaw" [attr.x1]="grip.jawLX" [attr.y1]="grip.jawBaseY" [attr.x2]="grip.leftTipX" [attr.y2]="grip.tipY" />
+              <line class="jaw" [attr.x1]="grip.jawRX" [attr.y1]="grip.jawBaseY" [attr.x2]="grip.rightTipX" [attr.y2]="grip.tipY" />
+              <circle class="tip" [attr.cx]="grip.leftTipX" [attr.cy]="grip.tipY" r="0.6" />
+              <circle class="tip" [attr.cx]="grip.rightTipX" [attr.cy]="grip.tipY" r="0.6" />
+              <rect class="part" *ngIf="gHolding" [attr.x]="grip.partX" [attr.y]="grip.partY" width="5.2" height="3.6" rx="0.6" />
+              <text class="part-label" *ngIf="gHolding" [attr.x]="grip.x" [attr.y]="grip.labelY">{{ partType }}</text>
+              <text class="grip-action" [attr.x]="grip.actionX" [attr.y]="grip.actionY">{{ gAction }}</text>
+            </g>
+          </svg>
         </div>
 
-        <div class="cycle-state" *ngIf="inspection as ins" [class.err]="ins.state === 'ERROR'">
-          <div class="row">
-            <span>Status</span>
-            <code>{{ ins.state }}<span *ngIf="ins.step"> · {{ ins.step }}</span></code>
+        <div class="mt-3 p-3 rounded-lg" style="background: var(--panel-2);">
+          <div class="flex justify-between items-center text-sm mb-1">
+            <span>Simulierter Roboter: <strong>{{ gAction }}</strong></span>
+            <span style="color: var(--muted);" *ngIf="analysis">{{ analysis.fps.toFixed(0) }} FPS</span>
           </div>
-          <div class="bar"><div class="fill" [style.width.%]="ins.progress * 100"></div></div>
-          <p class="muted" *ngIf="ins.error">Fehler: {{ ins.error }}</p>
+          <mat-progress-bar mode="determinate" [value]="handoverProgress * 100"></mat-progress-bar>
+          <p class="text-xs mt-2" style="color: var(--muted);">
+            Bauteil in die offene Hand nehmen und in die Kamera halten – der Greifer kommt,
+            übernimmt es und startet den Zyklus. (Oder rechts „Zyklus starten".)
+          </p>
         </div>
-        <p class="muted">Ablauf: Teil aus Halter greifen → Vorder-/Rückseite vor Kamera → OCR → sortieren.</p>
-      </div>
+      </mat-card-content>
+    </mat-card>
 
-      <h2>Manuelle Steuerung</h2>
-      <div class="jog">
-        <label>Jog {{ jogSpeed }} m/s (Tool-Frame)</label>
-        <div class="jog-grid">
-          <span>X</span>
-          <button (mousedown)="startJog('dx', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X+</button>
-          <button (mousedown)="startJog('dx', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X−</button>
-          <span>Y</span>
-          <button (mousedown)="startJog('dy', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Y+</button>
-          <button (mousedown)="startJog('dy', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Y−</button>
-          <span>Z</span>
-          <button (mousedown)="startJog('dz', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z+</button>
-          <button (mousedown)="startJog('dz', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z−</button>
-        </div>
-        <div class="actions">
-          <button (click)="gripper(true)" [disabled]="!connected">Greifer schließen</button>
-          <button (click)="gripper(false)" [disabled]="!connected">Greifer öffnen</button>
-        </div>
-      </div>
+    <!-- Rechte Spalte -->
+    <div class="flex flex-col gap-4">
 
-      <h2>Posen teachen (echter Roboter)</h2>
-      <p class="muted">Roboter per Jog an die Zielstelle fahren, dann die passende Pose speichern
-        (schreibt <code>poses.json</code>).</p>
-      <div class="actions">
-        <button *ngFor="let p of poseNames" (click)="teachPose(p)" [disabled]="!connected">⇱ {{ p }}</button>
-      </div>
+      <mat-card appearance="outlined">
+        <mat-card-header><mat-card-title>Inspektionszyklus</mat-card-title></mat-card-header>
+        <mat-card-content>
+          <div class="flex items-center gap-3 flex-wrap">
+            <mat-form-field appearance="outline" subscriptSizing="dynamic" class="w-40">
+              <mat-label>Bauteiltyp</mat-label>
+              <mat-select [(ngModel)]="partType" [disabled]="cycleRunning">
+                <mat-option *ngFor="let p of partTypes" [value]="p">{{ p }}</mat-option>
+              </mat-select>
+            </mat-form-field>
+            <button mat-raised-button color="primary" (click)="startInspection()"
+                    [disabled]="!connected || cycleRunning">
+              <mat-icon>play_arrow</mat-icon> Zyklus starten
+            </button>
+          </div>
 
-      <h2>Telemetrie</h2>
-      <div class="telemetry" *ngIf="robot; else noRobot">
-        <div class="row"><span>TCP-Pose [m, rad]</span><code>{{ robot.tcp_pose.join(', ') }}</code></div>
-        <div class="row"><span>Gelenke [rad]</span><code>{{ robot.joints.join(', ') }}</code></div>
-        <div class="row force" [class.warn]="robot.tcp_force_norm > 15">
-          <span>TCP-Kraft |F|</span><code>{{ fmt(robot.tcp_force_norm, 2) }} N</code></div>
-        <div class="row"><span>Greifer</span><code>{{ robot.gripper_closed ? 'geschlossen' : 'offen' }}</code></div>
-        <div class="row"><span>Status</span><code>{{ robot.robot_mode }} / {{ robot.safety_mode }}</code></div>
-      </div>
-      <ng-template #noRobot><p class="muted">Keine Telemetrie – nicht verbunden.</p></ng-template>
-    </section>
-  </main>
+          <div *ngIf="inspection as ins" class="mt-3">
+            <div class="flex justify-between text-sm">
+              <span style="color: var(--muted);">Status</span>
+              <code>{{ ins.state }}<span *ngIf="ins.step"> · {{ ins.step }}</span></code>
+            </div>
+            <mat-progress-bar class="mt-1" mode="determinate" [value]="ins.progress * 100"
+              [color]="ins.state === 'ERROR' ? 'warn' : 'primary'"></mat-progress-bar>
+            <p *ngIf="ins.error" class="text-xs mt-1" style="color: var(--danger);">Fehler: {{ ins.error }}</p>
+          </div>
+          <p class="text-xs mt-3" style="color: var(--muted);">
+            Ablauf: Teil aus Halter greifen → Vorder-/Rückseite vor Kamera → OCR → sortieren.
+          </p>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card appearance="outlined">
+        <mat-card-header><mat-card-title>Manuelle Steuerung</mat-card-title></mat-card-header>
+        <mat-card-content>
+          <p class="text-xs mb-2" style="color: var(--muted);">Jog {{ jogSpeed }} m/s (Tool-Frame)</p>
+          <div class="grid grid-cols-[auto_1fr_1fr] gap-2 items-center">
+            <span class="font-medium" style="color: var(--muted);">X</span>
+            <button mat-stroked-button (mousedown)="startJog('dx', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X+</button>
+            <button mat-stroked-button (mousedown)="startJog('dx', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X−</button>
+            <span class="font-medium" style="color: var(--muted);">Y</span>
+            <button mat-stroked-button (mousedown)="startJog('dy', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Y+</button>
+            <button mat-stroked-button (mousedown)="startJog('dy', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Y−</button>
+            <span class="font-medium" style="color: var(--muted);">Z</span>
+            <button mat-stroked-button (mousedown)="startJog('dz', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z+</button>
+            <button mat-stroked-button (mousedown)="startJog('dz', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z−</button>
+          </div>
+          <div class="flex flex-wrap gap-2 mt-3">
+            <button mat-stroked-button (click)="gripper(true)" [disabled]="!connected"><mat-icon>close_fullscreen</mat-icon> Greifer zu</button>
+            <button mat-stroked-button (click)="gripper(false)" [disabled]="!connected"><mat-icon>open_in_full</mat-icon> Greifer auf</button>
+          </div>
+
+          <mat-divider class="!my-4"></mat-divider>
+          <p class="text-xs mb-2" style="color: var(--muted);">
+            Posen teachen (echter Roboter): an die Stelle fahren, dann speichern → <code>poses.json</code>.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button mat-stroked-button *ngFor="let p of poseNames" (click)="teachPose(p)" [disabled]="!connected"
+                    matTooltip="Aktuelle TCP-Pose als '{{ p }}' speichern">
+              <mat-icon>my_location</mat-icon>{{ p }}
+            </button>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card appearance="outlined">
+        <mat-card-header><mat-card-title>Telemetrie</mat-card-title></mat-card-header>
+        <mat-card-content>
+          <ng-container *ngIf="robot; else noRobot">
+            <div class="tele-row"><span>TCP-Pose [m, rad]</span><code>{{ robot.tcp_pose.join(', ') }}</code></div>
+            <div class="tele-row"><span>Gelenke [rad]</span><code>{{ robot.joints.join(', ') }}</code></div>
+            <div class="tele-row"><span>TCP-Kraft |F|</span>
+              <code [style.color]="robot.tcp_force_norm > 15 ? 'var(--warn)' : null">{{ fmt(robot.tcp_force_norm, 2) }} N</code></div>
+            <div class="tele-row"><span>Greifer</span><code>{{ robot.gripper_closed ? 'geschlossen' : 'offen' }}</code></div>
+            <div class="tele-row"><span>Status</span><code>{{ robot.robot_mode }} / {{ robot.safety_mode }}</code></div>
+          </ng-container>
+          <ng-template #noRobot><p class="text-sm" style="color: var(--muted);">Keine Telemetrie – nicht verbunden.</p></ng-template>
+        </mat-card-content>
+      </mat-card>
+    </div>
+  </div>
 
   <!-- Inventar / Digital Product Passport -->
-  <section class="panel inventory">
-    <h2>Inventar · Digital Product Passport ({{ inventory.length }})</h2>
-    <p class="muted" *ngIf="!inventory.length">Noch keine Datensätze. Starte einen Inspektionszyklus.</p>
-    <table *ngIf="inventory.length">
-      <thead>
-        <tr>
-          <th>ID</th><th>Typ</th><th>Hersteller</th><th>Modell</th><th>Kapazität</th>
-          <th>Status</th><th>Bilder</th><th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr *ngFor="let r of inventory" [class.review]="r.status === 'review' && !r.reviewed">
-          <td><code>{{ r.id }}</code></td>
-          <td>{{ r.type }}</td>
-          <td>{{ r.manufacturer || '–' }}</td>
-          <td>{{ r.model || '–' }}</td>
-          <td>{{ r.capacity || '–' }}</td>
-          <td>
-            <span class="pill" [class.ok]="r.status === 'identified'" [class.warn]="r.status === 'review'">
-              {{ r.status === 'identified' ? 'erkannt' : (r.reviewed ? 'geprüft' : 'Review') }}
-            </span>
+  <mat-card appearance="outlined" class="mt-4">
+    <mat-card-header>
+      <mat-card-title>Inventar · Digital Product Passport ({{ inventory.length }})</mat-card-title>
+    </mat-card-header>
+    <mat-card-content>
+      <p *ngIf="!inventory.length" class="text-sm" style="color: var(--muted);">
+        Noch keine Datensätze. Starte einen Inspektionszyklus.
+      </p>
+      <table mat-table [dataSource]="inventory" *ngIf="inventory.length" class="w-full">
+        <ng-container matColumnDef="id">
+          <th mat-header-cell *matHeaderCellDef>ID</th>
+          <td mat-cell *matCellDef="let r"><code>{{ r.id }}</code></td>
+        </ng-container>
+        <ng-container matColumnDef="type">
+          <th mat-header-cell *matHeaderCellDef>Typ</th>
+          <td mat-cell *matCellDef="let r">{{ r.type }}</td>
+        </ng-container>
+        <ng-container matColumnDef="manufacturer">
+          <th mat-header-cell *matHeaderCellDef>Hersteller</th>
+          <td mat-cell *matCellDef="let r">{{ r.manufacturer || '–' }}</td>
+        </ng-container>
+        <ng-container matColumnDef="model">
+          <th mat-header-cell *matHeaderCellDef>Modell</th>
+          <td mat-cell *matCellDef="let r">{{ r.model || '–' }}</td>
+        </ng-container>
+        <ng-container matColumnDef="capacity">
+          <th mat-header-cell *matHeaderCellDef>Kapazität</th>
+          <td mat-cell *matCellDef="let r">{{ r.capacity || '–' }}</td>
+        </ng-container>
+        <ng-container matColumnDef="status">
+          <th mat-header-cell *matHeaderCellDef>Status</th>
+          <td mat-cell *matCellDef="let r">
+            <mat-chip-set>
+              <mat-chip [ngClass]="r.status === 'identified' ? 'chip-ok' : 'chip-warn'" disableRipple>
+                {{ r.status === 'identified' ? 'erkannt' : (r.reviewed ? 'geprüft' : 'Review') }}
+              </mat-chip>
+            </mat-chip-set>
           </td>
-          <td class="thumbs">
-            <img *ngIf="img(r.images?.front) as f" [src]="f" alt="front" title="Vorderseite" />
-            <img *ngIf="img(r.images?.back) as b" [src]="b" alt="back" title="Rückseite" />
+        </ng-container>
+        <ng-container matColumnDef="images">
+          <th mat-header-cell *matHeaderCellDef>Bilder</th>
+          <td mat-cell *matCellDef="let r">
+            <div class="flex gap-1 py-1">
+              <img *ngIf="img(r.images?.front) as f" [src]="f" alt="front" title="Vorderseite" class="thumb" />
+              <img *ngIf="img(r.images?.back) as b" [src]="b" alt="back" title="Rückseite" class="thumb" />
+            </div>
           </td>
-          <td>
-            <button *ngIf="r.status === 'review' && !r.reviewed" (click)="markReviewed(r)">als geprüft</button>
+        </ng-container>
+        <ng-container matColumnDef="actions">
+          <th mat-header-cell *matHeaderCellDef></th>
+          <td mat-cell *matCellDef="let r">
+            <button mat-button color="primary" *ngIf="r.status === 'review' && !r.reviewed" (click)="markReviewed(r)">
+              als geprüft
+            </button>
           </td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+        </ng-container>
+        <tr mat-header-row *matHeaderRowDef="invColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: invColumns;" [class.row-review]="row.status === 'review' && !row.reviewed"></tr>
+      </table>
+    </mat-card-content>
+  </mat-card>
 </div>
