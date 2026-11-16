@@ -1,0 +1,21 @@
+# Python
+backend/venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+backend/snapshots/
+
+# Modelle (groß / zur Laufzeit bezogen -> nicht ins Git)
+backend/models/*.pt
+backend/models/*.task
+
+# Laufzeitdaten: Inventar (DPP), Label-Bilder, geteachte Posen
+backend/data/
+
+# Node / Angular
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# Env / lokale Overrides
+.env

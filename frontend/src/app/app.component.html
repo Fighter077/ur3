@@ -1,0 +1,161 @@
+<div class="app">
+  <header>
+    <h1>UR3 · Inspektion & Dokumentation</h1>
+    <div class="status">
+      <span class="dot" [class.on]="connected"></span>
+      {{ connectionState }}
+      <span *ngIf="robot?.mock" class="badge">SIM</span>
+      <button class="primary" (click)="toggleConnection()">
+        {{ connected || connectionState === 'verbinde…' ? 'Trennen' : 'Verbinden' }}
+      </button>
+      <button class="danger" (click)="estop()" [disabled]="!connected">■ NOT-HALT</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Linke Spalte: Kamera + Geste -->
+    <section class="panel video">
+      <h2>Kamera & Geste</h2>
+      <div class="video-wrap">
+        <video #video autoplay playsinline muted></video>
+
+        <!-- Overlay: Hand/Finger + simulierter Greifer -->
+        <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" *ngIf="analysis">
+          <!-- Hände -->
+          <g *ngFor="let h of analysis.hands" class="hand">
+            <line *ngFor="let l of handLines(h)"
+              [attr.x1]="l.x1" [attr.y1]="l.y1" [attr.x2]="l.x2" [attr.y2]="l.y2" />
+            <circle *ngFor="let p of handDots(h)"
+              [attr.cx]="p.x" [attr.cy]="p.y" [attr.r]="p.tip ? 0.8 : 0.5" [class.tip]="p.tip" />
+          </g>
+
+          <!-- Simulierter Roboter-Greifer -->
+          <g class="gripper" *ngIf="hasSim" [class.holding]="gHolding" [class.handover]="gMode === 'handover'">
+            <line class="arm" [attr.x1]="grip.x" y1="0" [attr.x2]="grip.x" [attr.y2]="grip.armY2" />
+            <rect class="wrist" [attr.x]="grip.wristX" [attr.y]="grip.wristY"
+                  [attr.width]="grip.wristW" [attr.height]="grip.wristH" rx="1" />
+            <line class="jaw" [attr.x1]="grip.jawLX" [attr.y1]="grip.jawBaseY" [attr.x2]="grip.leftTipX" [attr.y2]="grip.tipY" />
+            <line class="jaw" [attr.x1]="grip.jawRX" [attr.y1]="grip.jawBaseY" [attr.x2]="grip.rightTipX" [attr.y2]="grip.tipY" />
+            <circle class="tip" [attr.cx]="grip.leftTipX" [attr.cy]="grip.tipY" r="0.6" />
+            <circle class="tip" [attr.cx]="grip.rightTipX" [attr.cy]="grip.tipY" r="0.6" />
+            <rect class="part" *ngIf="gHolding" [attr.x]="grip.partX" [attr.y]="grip.partY" width="5.2" height="3.6" rx="0.6" />
+            <text class="part-label" *ngIf="gHolding" [attr.x]="grip.x" [attr.y]="grip.labelY">{{ partType }}</text>
+            <text class="grip-action" [attr.x]="grip.actionX" [attr.y]="grip.actionY">{{ gAction }}</text>
+          </g>
+        </svg>
+      </div>
+
+      <!-- Übergabe -->
+      <div class="trigger" [class.on]="handoverActive">
+        <div class="trigger-head">
+          <span>Simulierter Roboter: <strong>{{ gAction }}</strong></span>
+          <span class="muted" *ngIf="analysis">{{ analysis.fps.toFixed(0) }} FPS</span>
+        </div>
+        <div class="bar"><div class="fill" [style.width.%]="handoverProgress * 100"></div></div>
+        <p class="muted">
+          Bauteil in die offene Hand nehmen und sie in die Kamera halten – der Greifer kommt,
+          übernimmt das Teil und startet den Inspektionszyklus. (Oder rechts „Zyklus starten".)
+        </p>
+      </div>
+    </section>
+
+    <!-- Rechte Spalte: Inspektion + Telemetrie -->
+    <section class="panel control">
+      <h2>Inspektionszyklus</h2>
+      <div class="cycle">
+        <label>Bauteiltyp</label>
+        <div class="row">
+          <select [disabled]="cycleRunning" (change)="partType = $any($event.target).value">
+            <option *ngFor="let p of partTypes" [value]="p" [selected]="p === partType">{{ p }}</option>
+          </select>
+          <button class="primary" (click)="startInspection()" [disabled]="!connected || cycleRunning">
+            ▶ Zyklus starten
+          </button>
+        </div>
+
+        <div class="cycle-state" *ngIf="inspection as ins" [class.err]="ins.state === 'ERROR'">
+          <div class="row">
+            <span>Status</span>
+            <code>{{ ins.state }}<span *ngIf="ins.step"> · {{ ins.step }}</span></code>
+          </div>
+          <div class="bar"><div class="fill" [style.width.%]="ins.progress * 100"></div></div>
+          <p class="muted" *ngIf="ins.error">Fehler: {{ ins.error }}</p>
+        </div>
+        <p class="muted">Ablauf: Teil aus Halter greifen → Vorder-/Rückseite vor Kamera → OCR → sortieren.</p>
+      </div>
+
+      <h2>Manuelle Steuerung</h2>
+      <div class="jog">
+        <label>Jog {{ jogSpeed }} m/s (Tool-Frame)</label>
+        <div class="jog-grid">
+          <span>X</span>
+          <button (mousedown)="startJog('dx', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X+</button>
+          <button (mousedown)="startJog('dx', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X−</button>
+          <span>Y</span>
+          <button (mousedown)="startJog('dy', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Y+</button>
+          <button (mousedown)="startJog('dy', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Y−</button>
+          <span>Z</span>
+          <button (mousedown)="startJog('dz', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z+</button>
+          <button (mousedown)="startJog('dz', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z−</button>
+        </div>
+        <div class="actions">
+          <button (click)="gripper(true)" [disabled]="!connected">Greifer schließen</button>
+          <button (click)="gripper(false)" [disabled]="!connected">Greifer öffnen</button>
+        </div>
+      </div>
+
+      <h2>Posen teachen (echter Roboter)</h2>
+      <p class="muted">Roboter per Jog an die Zielstelle fahren, dann die passende Pose speichern
+        (schreibt <code>poses.json</code>).</p>
+      <div class="actions">
+        <button *ngFor="let p of poseNames" (click)="teachPose(p)" [disabled]="!connected">⇱ {{ p }}</button>
+      </div>
+
+      <h2>Telemetrie</h2>
+      <div class="telemetry" *ngIf="robot; else noRobot">
+        <div class="row"><span>TCP-Pose [m, rad]</span><code>{{ robot.tcp_pose.join(', ') }}</code></div>
+        <div class="row"><span>Gelenke [rad]</span><code>{{ robot.joints.join(', ') }}</code></div>
+        <div class="row force" [class.warn]="robot.tcp_force_norm > 15">
+          <span>TCP-Kraft |F|</span><code>{{ fmt(robot.tcp_force_norm, 2) }} N</code></div>
+        <div class="row"><span>Greifer</span><code>{{ robot.gripper_closed ? 'geschlossen' : 'offen' }}</code></div>
+        <div class="row"><span>Status</span><code>{{ robot.robot_mode }} / {{ robot.safety_mode }}</code></div>
+      </div>
+      <ng-template #noRobot><p class="muted">Keine Telemetrie – nicht verbunden.</p></ng-template>
+    </section>
+  </main>
+
+  <!-- Inventar / Digital Product Passport -->
+  <section class="panel inventory">
+    <h2>Inventar · Digital Product Passport ({{ inventory.length }})</h2>
+    <p class="muted" *ngIf="!inventory.length">Noch keine Datensätze. Starte einen Inspektionszyklus.</p>
+    <table *ngIf="inventory.length">
+      <thead>
+        <tr>
+          <th>ID</th><th>Typ</th><th>Hersteller</th><th>Modell</th><th>Kapazität</th>
+          <th>Status</th><th>Bilder</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let r of inventory" [class.review]="r.status === 'review' && !r.reviewed">
+          <td><code>{{ r.id }}</code></td>
+          <td>{{ r.type }}</td>
+          <td>{{ r.manufacturer || '–' }}</td>
+          <td>{{ r.model || '–' }}</td>
+          <td>{{ r.capacity || '–' }}</td>
+          <td>
+            <span class="pill" [class.ok]="r.status === 'identified'" [class.warn]="r.status === 'review'">
+              {{ r.status === 'identified' ? 'erkannt' : (r.reviewed ? 'geprüft' : 'Review') }}
+            </span>
+          </td>
+          <td class="thumbs">
+            <img *ngIf="img(r.images?.front) as f" [src]="f" alt="front" title="Vorderseite" />
+            <img *ngIf="img(r.images?.back) as b" [src]="b" alt="back" title="Rückseite" />
+          </td>
+          <td>
+            <button *ngIf="r.status === 'review' && !r.reviewed" (click)="markReviewed(r)">als geprüft</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+</div>

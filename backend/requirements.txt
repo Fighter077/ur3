@@ -1,0 +1,26 @@
+# --- Web / WebRTC ---
+aiohttp==3.11.18
+aiohttp-cors==0.7.0
+aiortc==1.12.0
+# av 14.4.0 (das Neueste in aiortcs Bereich <15) hat KEIN Binär-Wheel -> würde aus dem
+# Quellcode gebaut (braucht ffmpeg7 + Compiler). 14.2.0 ist die höchste Version mit Wheel,
+# die aiortc 1.12.0 (av>=14,<15) akzeptiert.
+av==14.2.0
+
+# --- Vision ---
+# Kein opencv-* hier gepinnt: ultralytics zieht opencv-python, mediapipe opencv-contrib-python.
+# Diese beiden würden sich in die Quere kommen (zwei cv2). Der Dockerfile vereinheitlicht sie
+# danach auf EIN opencv-contrib-python-headless (enthält alles, braucht kein libGL).
+numpy==2.1.1
+ultralytics==8.3.40
+# Finger-/Hand-Landmarks (21 pro Hand) für die Trigger-Geste. 1.2.3 ist mit numpy 2.1.1 ok.
+mediapipe==1.2.3
+
+# --- OCR (Label lesen) ---
+# pytesseract = dünner Wrapper um die Tesseract-Binary (apt-Paket tesseract-ocr, siehe Dockerfile).
+pytesseract==0.3.13
+
+# --- Roboter (RTDE) ---
+# Nur nötig für ROBOT_MOCK=false (echte Hardware). Wird im Code lazy importiert.
+# Bei Build-Problemen auf manchen Plattformen diese Zeile auskommentieren und mit Mock arbeiten.
+ur_rtde==1.6.0
