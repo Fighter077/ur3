@@ -1,6 +1,6 @@
 <mat-toolbar color="primary" class="!h-auto flex-wrap gap-2 py-2">
   <mat-icon>precision_manufacturing</mat-icon>
-  <span class="font-medium">UR3 · Inspektion &amp; Dokumentation</span>
+  <span class="font-medium">{{ 'app.title' | translate }}</span>
   <span class="flex-1"></span>
   <span class="flex items-center gap-2 text-sm">
     <span class="inline-block w-2.5 h-2.5 rounded-full"
@@ -8,13 +8,13 @@
     {{ connectionState }}
   </span>
   <span *ngIf="robot?.mock" class="text-xs font-bold px-2 py-0.5 rounded"
-        style="background: var(--warn); color: #231a00;">SIM</span>
+        style="background: var(--warn); color: #231a00;">{{ 'status.sim' | translate }}</span>
   <button mat-flat-button (click)="toggleConnection()">
     <mat-icon>{{ connected ? 'link_off' : 'link' }}</mat-icon>
-    {{ connected || connectionState === 'verbinde…' ? 'Trennen' : 'Verbinden' }}
+    {{ (connected || connectionState === 'connecting…' ? 'status.disconnect' : 'status.connect') | translate }}
   </button>
   <button mat-flat-button color="warn" (click)="estop()" [disabled]="!connected">
-    <mat-icon>pan_tool</mat-icon> NOT-HALT
+    <mat-icon>pan_tool</mat-icon> {{ 'status.estop' | translate }}
   </button>
 </mat-toolbar>
 
@@ -23,7 +23,7 @@
 
     <!-- Kamera & Geste -->
     <mat-card appearance="outlined">
-      <mat-card-header><mat-card-title>Kamera &amp; Geste</mat-card-title></mat-card-header>
+      <mat-card-header><mat-card-title>{{ 'cam.title' | translate }}</mat-card-title></mat-card-header>
       <mat-card-content>
         <div class="video-wrap">
           <video #video autoplay playsinline muted></video>
@@ -51,14 +51,12 @@
 
         <div class="mt-3 p-3 rounded-lg" style="background: var(--panel-2);">
           <div class="flex justify-between items-center text-sm mb-1">
-            <span>Simulierter Roboter: <strong>{{ gAction }}</strong></span>
+            <span>{{ 'sim.robot' | translate }} <strong>{{ gAction }}</strong></span>
             <span style="color: var(--muted);" *ngIf="analysis">{{ analysis.fps.toFixed(0) }} FPS</span>
           </div>
           <mat-progress-bar mode="determinate" [value]="handoverProgress * 100"></mat-progress-bar>
           <p class="text-xs mt-2" style="color: var(--muted);">
-            Bauteil in die offene Hand nehmen und in die Kamera halten – der Greifer kommt,
-            übernimmt es und startet den Zyklus. (Oder rechts „Zyklus starten".)
-          </p>
+            {{ (controlMode === 'gesture' ? 'sim.hint' : 'sim.hintSpacebar') | translate }}</p>
         </div>
       </mat-card-content>
     </mat-card>
@@ -67,40 +65,72 @@
     <div class="flex flex-col gap-4">
 
       <mat-card appearance="outlined">
-        <mat-card-header><mat-card-title>Inspektionszyklus</mat-card-title></mat-card-header>
+        <mat-card-header><mat-card-title>{{ 'robot.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
+          <mat-button-toggle-group [value]="robotUseReal" (change)="robotUseReal = $event.value">
+            <mat-button-toggle [value]="false"><mat-icon>computer</mat-icon> {{ 'robot.sim' | translate }}</mat-button-toggle>
+            <mat-button-toggle [value]="true"><mat-icon>precision_manufacturing</mat-icon> {{ 'robot.real' | translate }}</mat-button-toggle>
+          </mat-button-toggle-group>
+          <div class="flex items-center gap-3 flex-wrap mt-3">
+            <mat-form-field appearance="outline" subscriptSizing="dynamic" class="w-48" *ngIf="robotUseReal">
+              <mat-label>{{ 'robot.ip' | translate }}</mat-label>
+              <input matInput [(ngModel)]="robotIp" placeholder="192.168.1.100" />
+            </mat-form-field>
+            <button mat-raised-button color="primary" (click)="applyRobot()">
+              <mat-icon>bolt</mat-icon> {{ 'robot.apply' | translate }}
+            </button>
+          </div>
+          <p class="text-xs mt-2" style="color: var(--muted);">{{ 'robot.hint' | translate }}</p>
+        </mat-card-content>
+      </mat-card>
+
+      <mat-card appearance="outlined">
+        <mat-card-header><mat-card-title>{{ 'cycle.title' | translate }}</mat-card-title></mat-card-header>
+        <mat-card-content>
+          <div class="mb-3">
+            <p class="text-xs mb-1" style="color: var(--muted);">{{ 'control.title' | translate }}</p>
+            <mat-button-toggle-group [value]="controlMode" (change)="setControlMode($event.value)" [disabled]="cycleRunning">
+              <mat-button-toggle value="gesture"><mat-icon>back_hand</mat-icon> {{ 'control.gesture' | translate }}</mat-button-toggle>
+              <mat-button-toggle value="spacebar"><mat-icon>space_bar</mat-icon> {{ 'control.spacebar' | translate }}</mat-button-toggle>
+            </mat-button-toggle-group>
+          </div>
           <div class="flex items-center gap-3 flex-wrap">
             <mat-form-field appearance="outline" subscriptSizing="dynamic" class="w-40">
-              <mat-label>Bauteiltyp</mat-label>
+              <mat-label>{{ 'cycle.partType' | translate }}</mat-label>
               <mat-select [(ngModel)]="partType" [disabled]="cycleRunning">
                 <mat-option *ngFor="let p of partTypes" [value]="p">{{ p }}</mat-option>
               </mat-select>
             </mat-form-field>
             <button mat-raised-button color="primary" (click)="startInspection()"
                     [disabled]="!connected || cycleRunning">
-              <mat-icon>play_arrow</mat-icon> Zyklus starten
+              <mat-icon>play_arrow</mat-icon> {{ 'cycle.start' | translate }}
             </button>
           </div>
 
           <div *ngIf="inspection as ins" class="mt-3">
             <div class="flex justify-between text-sm">
-              <span style="color: var(--muted);">Status</span>
+              <span style="color: var(--muted);">{{ 'cycle.status' | translate }}</span>
               <code>{{ ins.state }}<span *ngIf="ins.step"> · {{ ins.step }}</span></code>
             </div>
             <mat-progress-bar class="mt-1" mode="determinate" [value]="ins.progress * 100"
               [color]="ins.state === 'ERROR' ? 'warn' : 'primary'"></mat-progress-bar>
-            <p *ngIf="ins.error" class="text-xs mt-1" style="color: var(--danger);">Fehler: {{ ins.error }}</p>
+            <p *ngIf="ins.error" class="text-xs mt-1" style="color: var(--danger);">
+              {{ 'cycle.error' | translate:{ error: ins.error } }}</p>
           </div>
-          <p class="text-xs mt-3" style="color: var(--muted);">
-            Ablauf: Teil aus Halter greifen → Vorder-/Rückseite vor Kamera → OCR → sortieren.
-          </p>
+
+          <ol class="steps mt-3">
+            <li *ngFor="let s of steps; let i = index" [attr.data-state]="stepState(i)">
+              <mat-icon>{{ stepIcon(i) }}</mat-icon>
+              <span>{{ i + 1 }}. {{ s | translate }}</span>
+            </li>
+          </ol>
         </mat-card-content>
       </mat-card>
 
       <mat-card appearance="outlined">
-        <mat-card-header><mat-card-title>Manuelle Steuerung</mat-card-title></mat-card-header>
+        <mat-card-header><mat-card-title>{{ 'manual.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
-          <p class="text-xs mb-2" style="color: var(--muted);">Jog {{ jogSpeed }} m/s (Tool-Frame)</p>
+          <p class="text-xs mb-2" style="color: var(--muted);">{{ 'manual.jog' | translate:{ speed: jogSpeed } }}</p>
           <div class="grid grid-cols-[auto_1fr_1fr] gap-2 items-center">
             <span class="font-medium" style="color: var(--muted);">X</span>
             <button mat-stroked-button (mousedown)="startJog('dx', 1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">X+</button>
@@ -113,17 +143,15 @@
             <button mat-stroked-button (mousedown)="startJog('dz', -1)" (mouseup)="stopJog()" (mouseleave)="stopJog()" [disabled]="!connected">Z−</button>
           </div>
           <div class="flex flex-wrap gap-2 mt-3">
-            <button mat-stroked-button (click)="gripper(true)" [disabled]="!connected"><mat-icon>close_fullscreen</mat-icon> Greifer zu</button>
-            <button mat-stroked-button (click)="gripper(false)" [disabled]="!connected"><mat-icon>open_in_full</mat-icon> Greifer auf</button>
+            <button mat-stroked-button (click)="gripper(true)" [disabled]="!connected"><mat-icon>close_fullscreen</mat-icon> {{ 'manual.gripperClose' | translate }}</button>
+            <button mat-stroked-button (click)="gripper(false)" [disabled]="!connected"><mat-icon>open_in_full</mat-icon> {{ 'manual.gripperOpen' | translate }}</button>
           </div>
 
           <mat-divider class="!my-4"></mat-divider>
-          <p class="text-xs mb-2" style="color: var(--muted);">
-            Posen teachen (echter Roboter): an die Stelle fahren, dann speichern → <code>poses.json</code>.
-          </p>
+          <p class="text-xs mb-2" style="color: var(--muted);">{{ 'manual.teachHint' | translate }}</p>
           <div class="flex flex-wrap gap-2">
             <button mat-stroked-button *ngFor="let p of poseNames" (click)="teachPose(p)" [disabled]="!connected"
-                    matTooltip="Aktuelle TCP-Pose als '{{ p }}' speichern">
+                    matTooltip="{{ 'manual.teachTooltip' | translate:{ name: p } }}">
               <mat-icon>my_location</mat-icon>{{ p }}
             </button>
           </div>
@@ -131,17 +159,18 @@
       </mat-card>
 
       <mat-card appearance="outlined">
-        <mat-card-header><mat-card-title>Telemetrie</mat-card-title></mat-card-header>
+        <mat-card-header><mat-card-title>{{ 'telemetry.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
           <ng-container *ngIf="robot; else noRobot">
-            <div class="tele-row"><span>TCP-Pose [m, rad]</span><code>{{ robot.tcp_pose.join(', ') }}</code></div>
-            <div class="tele-row"><span>Gelenke [rad]</span><code>{{ robot.joints.join(', ') }}</code></div>
-            <div class="tele-row"><span>TCP-Kraft |F|</span>
+            <div class="tele-row"><span>{{ 'telemetry.tcpPose' | translate }}</span><code>{{ robot.tcp_pose.join(', ') }}</code></div>
+            <div class="tele-row"><span>{{ 'telemetry.joints' | translate }}</span><code>{{ robot.joints.join(', ') }}</code></div>
+            <div class="tele-row"><span>{{ 'telemetry.force' | translate }}</span>
               <code [style.color]="robot.tcp_force_norm > 15 ? 'var(--warn)' : null">{{ fmt(robot.tcp_force_norm, 2) }} N</code></div>
-            <div class="tele-row"><span>Greifer</span><code>{{ robot.gripper_closed ? 'geschlossen' : 'offen' }}</code></div>
-            <div class="tele-row"><span>Status</span><code>{{ robot.robot_mode }} / {{ robot.safety_mode }}</code></div>
+            <div class="tele-row"><span>{{ 'telemetry.gripper' | translate }}</span>
+              <code>{{ (robot.gripper_closed ? 'telemetry.gripperClosed' : 'telemetry.gripperOpen') | translate }}</code></div>
+            <div class="tele-row"><span>{{ 'telemetry.status' | translate }}</span><code>{{ robot.robot_mode }} / {{ robot.safety_mode }}</code></div>
           </ng-container>
-          <ng-template #noRobot><p class="text-sm" style="color: var(--muted);">Keine Telemetrie – nicht verbunden.</p></ng-template>
+          <ng-template #noRobot><p class="text-sm" style="color: var(--muted);">{{ 'telemetry.none' | translate }}</p></ng-template>
         </mat-card-content>
       </mat-card>
     </div>
@@ -150,49 +179,47 @@
   <!-- Inventar / Digital Product Passport -->
   <mat-card appearance="outlined" class="mt-4">
     <mat-card-header>
-      <mat-card-title>Inventar · Digital Product Passport ({{ inventory.length }})</mat-card-title>
+      <mat-card-title>{{ 'inventory.title' | translate:{ count: inventory.length } }}</mat-card-title>
     </mat-card-header>
     <mat-card-content>
-      <p *ngIf="!inventory.length" class="text-sm" style="color: var(--muted);">
-        Noch keine Datensätze. Starte einen Inspektionszyklus.
-      </p>
+      <p *ngIf="!inventory.length" class="text-sm" style="color: var(--muted);">{{ 'inventory.empty' | translate }}</p>
       <table mat-table [dataSource]="inventory" *ngIf="inventory.length" class="w-full">
         <ng-container matColumnDef="id">
-          <th mat-header-cell *matHeaderCellDef>ID</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.id' | translate }}</th>
           <td mat-cell *matCellDef="let r"><code>{{ r.id }}</code></td>
         </ng-container>
         <ng-container matColumnDef="type">
-          <th mat-header-cell *matHeaderCellDef>Typ</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.type' | translate }}</th>
           <td mat-cell *matCellDef="let r">{{ r.type }}</td>
         </ng-container>
         <ng-container matColumnDef="manufacturer">
-          <th mat-header-cell *matHeaderCellDef>Hersteller</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.manufacturer' | translate }}</th>
           <td mat-cell *matCellDef="let r">{{ r.manufacturer || '–' }}</td>
         </ng-container>
         <ng-container matColumnDef="model">
-          <th mat-header-cell *matHeaderCellDef>Modell</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.model' | translate }}</th>
           <td mat-cell *matCellDef="let r">{{ r.model || '–' }}</td>
         </ng-container>
         <ng-container matColumnDef="capacity">
-          <th mat-header-cell *matHeaderCellDef>Kapazität</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.capacity' | translate }}</th>
           <td mat-cell *matCellDef="let r">{{ r.capacity || '–' }}</td>
         </ng-container>
         <ng-container matColumnDef="status">
-          <th mat-header-cell *matHeaderCellDef>Status</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.status' | translate }}</th>
           <td mat-cell *matCellDef="let r">
             <mat-chip-set>
               <mat-chip [ngClass]="r.status === 'identified' ? 'chip-ok' : 'chip-warn'" disableRipple>
-                {{ r.status === 'identified' ? 'erkannt' : (r.reviewed ? 'geprüft' : 'Review') }}
+                {{ (r.status === 'identified' ? 'inventory.identified' : (r.reviewed ? 'inventory.reviewed' : 'inventory.review')) | translate }}
               </mat-chip>
             </mat-chip-set>
           </td>
         </ng-container>
         <ng-container matColumnDef="images">
-          <th mat-header-cell *matHeaderCellDef>Bilder</th>
+          <th mat-header-cell *matHeaderCellDef>{{ 'inventory.images' | translate }}</th>
           <td mat-cell *matCellDef="let r">
             <div class="flex gap-1 py-1">
-              <img *ngIf="img(r.images?.front) as f" [src]="f" alt="front" title="Vorderseite" class="thumb" />
-              <img *ngIf="img(r.images?.back) as b" [src]="b" alt="back" title="Rückseite" class="thumb" />
+              <img *ngIf="img(r.images?.front) as f" [src]="f" alt="front" title="front" class="thumb" />
+              <img *ngIf="img(r.images?.back) as b" [src]="b" alt="back" title="back" class="thumb" />
             </div>
           </td>
         </ng-container>
@@ -200,7 +227,7 @@
           <th mat-header-cell *matHeaderCellDef></th>
           <td mat-cell *matCellDef="let r">
             <button mat-button color="primary" *ngIf="r.status === 'review' && !r.reviewed" (click)="markReviewed(r)">
-              als geprüft
+              {{ 'inventory.markReviewed' | translate }}
             </button>
           </td>
         </ng-container>
@@ -210,3 +237,6 @@
     </mat-card-content>
   </mat-card>
 </div>
+
+<!-- Aufhell-"Blitz": weißes Vollbild während der Foto-Aufnahme (bessere Belichtung des Labels) -->
+<div class="flash" [class.on]="flashOn" aria-hidden="true"></div>

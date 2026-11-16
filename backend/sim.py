@@ -21,6 +21,8 @@ import threading
 from config import config
 
 _lock = threading.Lock()
+# Gesten-Steuerung aktiv? (False = nur Button/Leertaste; Greifer folgt dann nicht der Hand)
+_gesture_enabled = True
 _s = {
     "x": 0.5, "y": 0.16,     # Greiferposition (normalisiert, Bildkoordinaten)
     "opening": 1.0,          # 0 = geschlossen, 1 = offen
@@ -43,6 +45,15 @@ def set_state(**kw) -> None:
         _s.update(kw)
 
 
+def set_gesture_enabled(enabled: bool) -> None:
+    global _gesture_enabled
+    _gesture_enabled = bool(enabled)
+
+
+def gesture_enabled() -> bool:
+    return _gesture_enabled
+
+
 def _ease(cur: float, target: float, k: float = 0.35) -> float:
     return cur + (target - cur) * k
 
@@ -62,6 +73,16 @@ def update_idle(hands) -> tuple[dict, bool, float]:
         gesture = hands[0].get("gesture")
 
     with _lock:
+        if not _gesture_enabled:
+            # Gesten-Steuerung aus -> Greifer in Ruheposition, keine Auslösung über die Hand.
+            _s["x"] = _ease(_s["x"], READY[0], 0.2)
+            _s["y"] = _ease(_s["y"], READY[1], 0.2)
+            _s["opening"] = 1.0
+            _s["holding"] = False
+            _s["mode"] = "ready"
+            _s["action"] = "bereit (Leertaste)"
+            _stable = 0
+            return dict(_s), False, 0.0
         if palm is not None:
             tx, ty = palm[0], palm[1]
             _s["x"] = _ease(_s["x"], tx)

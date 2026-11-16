@@ -1,0 +1,92 @@
+{
+  "app": {
+    "title": "UR3 · Inspection & Documentation"
+  },
+  "status": {
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "estop": "E-STOP",
+    "sim": "SIM"
+  },
+  "cam": {
+    "title": "Camera & Gesture"
+  },
+  "sim": {
+    "robot": "Simulated robot:",
+    "hint": "Take the part in your open hand and hold it up to the camera – the gripper comes, takes the part and starts the cycle. (Or use \"Start cycle\" on the right.)",
+    "hintSpacebar": "Spacebar mode: hold the part up to the camera and press the spacebar to start the cycle."
+  },
+  "control": {
+    "title": "Trigger",
+    "gesture": "Gesture",
+    "spacebar": "Spacebar"
+  },
+  "robot": {
+    "title": "Robot",
+    "sim": "Simulation",
+    "real": "Real UR3e",
+    "ip": "Robot IP",
+    "apply": "Apply",
+    "hint": "Switch between simulation and the real UR3e (RTDE). If the connection fails it falls back to simulation.",
+    "switchedMock": "Switched to simulation.",
+    "switchedReal": "Connected to UR3e at {{ip}}.",
+    "failed": "Connection failed: {{error}} – staying in simulation."
+  },
+  "cycle": {
+    "title": "Inspection cycle",
+    "partType": "Part type",
+    "start": "Start cycle",
+    "status": "Status",
+    "error": "Error: {{error}}",
+    "flow": "Flow: grip part from holder → front/back in front of camera → OCR → sort."
+  },
+  "steps": {
+    "pick": "Grip part",
+    "front": "Capture front",
+    "back": "Capture back",
+    "read": "Read label (OCR)",
+    "sort": "Sort",
+    "done": "Done"
+  },
+  "manual": {
+    "title": "Manual control",
+    "jog": "Jog {{speed}} m/s (tool frame)",
+    "gripperClose": "Close gripper",
+    "gripperOpen": "Open gripper",
+    "teachTitle": "Teach poses (real robot)",
+    "teachHint": "Jog the robot to the target, then save the matching pose → writes poses.json.",
+    "teachTooltip": "Save current TCP pose as '{{name}}'"
+  },
+  "telemetry": {
+    "title": "Telemetry",
+    "tcpPose": "TCP pose [m, rad]",
+    "joints": "Joints [rad]",
+    "force": "TCP force |F|",
+    "gripper": "Gripper",
+    "gripperClosed": "closed",
+    "gripperOpen": "open",
+    "status": "Status",
+    "none": "No telemetry – not connected."
+  },
+  "inventory": {
+    "title": "Inventory · Digital Product Passport ({{count}})",
+    "empty": "No records yet. Start an inspection cycle.",
+    "id": "ID",
+    "type": "Type",
+    "manufacturer": "Manufacturer",
+    "model": "Model",
+    "capacity": "Capacity",
+    "status": "Status",
+    "images": "Images",
+    "identified": "recognized",
+    "review": "Review",
+    "reviewed": "checked",
+    "markReviewed": "mark checked"
+  },
+  "ack": {
+    "teachSaved": "Pose \"{{name}}\" saved",
+    "teachFailed": "Teach failed: {{error}}",
+    "startFailed": "Cannot start: {{error}}",
+    "error": "Error: {{error}}"
+  }
+}

@@ -1,5 +1,6 @@
 from .controller import (
     get_controller,
+    set_controller,
     RobotController,
     MockController,
     RTDEController,
@@ -8,6 +9,7 @@ from .controller import (
 
 __all__ = [
     "get_controller",
+    "set_controller",
     "RobotController",
     "MockController",
     "RTDEController",

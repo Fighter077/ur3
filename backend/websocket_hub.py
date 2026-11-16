@@ -13,7 +13,7 @@ from typing import Dict
 
 from aiohttp import web, WSMsgType
 
-from robot import get_controller, RobotError
+from robot import get_controller, set_controller, RobotError
 from robot.inspection import get_cell
 from inventory import get_inventory
 
@@ -85,6 +85,14 @@ def _handle_command(cmd: dict) -> dict:
         elif action == "teach_pose":
             res = get_cell().teach_pose(cmd.get("name", ""))
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
+        elif action == "set_control_mode":
+            import sim
+            mode = cmd.get("mode", "gesture")
+            sim.set_gesture_enabled(mode == "gesture")
+            return {"type": "ack", "action": action, "ok": True, "result": {"mode": mode}}
+        elif action == "set_robot":
+            res = set_controller(bool(cmd.get("mock", True)), cmd.get("ip"))
+            return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
         elif action == "list_inventory":
             return {"type": "inventory", "records": get_inventory().list_records()}
         elif action == "mark_reviewed":
@@ -142,11 +150,11 @@ async def ws_handler(request: web.Request):
 # Telemetrie-Schleife: periodisch Roboterzustand an alle Clients
 # --------------------------------------------------------------------------- #
 async def telemetry_loop(app):
-    robot = get_controller()
     loop = asyncio.get_running_loop()
     try:
         while True:
-            state = await loop.run_in_executor(None, robot.get_state)
+            # Controller jedes Mal frisch holen -> ein Laufzeit-Wechsel (Mock<->echt) greift sofort.
+            state = await loop.run_in_executor(None, lambda: get_controller().get_state())
             await broadcast({"type": "robot_state", "state": state})
             await asyncio.sleep(0.1)  # 10 Hz
     except asyncio.CancelledError:

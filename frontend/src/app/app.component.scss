@@ -49,3 +49,26 @@ tr.row-review td { background: rgba(234, 179, 8, 0.06); }
   --mdc-chip-elevated-container-color: rgba(234, 179, 8, 0.18);
   --mdc-chip-label-text-color: #f59e0b;
 }
+
+// Ablaufschritte als Status-Liste
+.steps {
+  list-style: none; margin: 0.6rem 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 0.35rem;
+  li {
+    display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--muted);
+    mat-icon { font-size: 18px; width: 18px; height: 18px; color: var(--border); }
+    &[data-state="done"] { color: var(--text); mat-icon { color: var(--ok); } }
+    &[data-state="current"] {
+      color: var(--text); font-weight: 600;
+      mat-icon { color: var(--accent); animation: step-pulse 1s ease-in-out infinite; }
+    }
+  }
+}
+@keyframes step-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+// Aufhell-"Blitz" während der Aufnahme
+.flash {
+  position: fixed; inset: 0; background: #fff; opacity: 0;
+  pointer-events: none; z-index: 9999; transition: opacity 0.1s ease;
+}
+.flash.on { opacity: 0.92; }

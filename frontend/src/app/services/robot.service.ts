@@ -17,7 +17,7 @@ export class RobotService {
   private stillTimer: any = null;
   private stillCanvas = document.createElement('canvas');
 
-  connectionState$ = new BehaviorSubject<string>('getrennt');
+  connectionState$ = new BehaviorSubject<string>('disconnected');
   robotState$ = new BehaviorSubject<RobotState | null>(null);
   analysis$ = new BehaviorSubject<Analysis | null>(null);
   inspection$ = new BehaviorSubject<InspectionState | null>(null);
@@ -44,14 +44,14 @@ export class RobotService {
     if (videoEl) videoEl.srcObject = null;
     this.ws?.close();
     this.ws = null;
-    this.connectionState$.next('getrennt');
+    this.connectionState$.next('disconnected');
   }
 
   private openWebSocket(): Promise<void> {
     return new Promise((resolve) => {
       this.ws = new WebSocket(`${BACKEND.ws}/ws?clientId=${this.clientId}`);
       this.ws.onopen = () => resolve();
-      this.ws.onclose = () => this.connectionState$.next('getrennt');
+      this.ws.onclose = () => this.connectionState$.next('disconnected');
       this.ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         switch (msg.type) {
@@ -76,12 +76,12 @@ export class RobotService {
   }
 
   private async startWebRTC(videoEl: HTMLVideoElement) {
-    this.connectionState$.next('verbinde…');
+    this.connectionState$.next('connecting…');
     this.pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
     this.pc.onconnectionstatechange = () =>
-      this.connectionState$.next(this.pc?.connectionState || 'getrennt');
+      this.connectionState$.next(this.pc?.connectionState || 'disconnected');
 
     // Hohe Auflösung + Bitrate: der Text auf Bauteil-Labels ist klein -> für OCR zählt Schärfe,
     // nicht Framerate. Niedrige FPS lassen die Bitrate in Bildqualität fliessen.
@@ -199,5 +199,11 @@ export class RobotService {
   }
   teachPose(name: string) {
     this.send({ action: 'teach_pose', name });
+  }
+  setControlMode(mode: 'gesture' | 'spacebar') {
+    this.send({ action: 'set_control_mode', mode });
+  }
+  setRobot(mock: boolean, ip: string) {
+    this.send({ action: 'set_robot', mock, ip });
   }
 }
