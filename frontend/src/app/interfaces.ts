@@ -61,6 +61,7 @@ export interface InspectionState {
   progress: number;          // 0..1
   record_id: string | null;
   error: string | null;
+  capture_active?: boolean;  // True only after arrival, during capture/OCR.
 }
 
 // Ein Eintrag im Inventar / Digital Product Passport.

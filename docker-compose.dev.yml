@@ -1,0 +1,59 @@
+# Dev-Overlay: Backend mit Python-Reload, Frontend mit ng serve + Live-Reload.
+# Quellcode wird live gemountet. Ändert NICHTS am Normal-/Prod-Betrieb –
+# dieses File wird nur genutzt, wenn man es explizit mit -f auswählt.
+#
+# Starten:  podman compose -f docker-compose.dev.yml up -d --build
+#           (oder einfach: ./scripts/dev-watch.sh)
+# Logs:     podman logs -f ur3-backend
+# Beenden:  podman compose down   (dann ohne Overlay wieder normal hochfahren)
+#
+# Wie es funktioniert:
+#   - volume ./backend:/app überdeckt den ins Image kopierten Code mit dem Host-Code
+#     -> gespeicherte Änderungen sind sofort im Container sichtbar (kein Rebuild nötig).
+#   - watchfiles überwacht /app und startet `python server.py` bei .py-Änderungen neu.
+#     (aiohttp hat keinen eigenen Reloader.) watchfiles wird beim Containerstart installiert
+#     -> keine Änderung an requirements.txt / am Prod-Image, kein Cache-Bust beim Build.
+name: ur3
+
+services:
+  backend:
+    extends:
+      file: docker-compose.yml
+      service: backend
+    volumes:
+      # Ganzer Backend-Quellbaum live (überdeckt das Image-/app). :z = SELinux-Share-Label (Fedora).
+      - ./backend:/app:z
+    command:
+      - sh
+      - -c
+      - |
+        pip install --no-cache-dir --quiet watchfiles
+        exec watchfiles --filter python 'python server.py' /app
+
+  frontend:
+    extends:
+      file: docker-compose.yml
+      service: frontend
+    build:
+      context: ./frontend
+      target: development
+    image: localhost/ur3-frontend:dev
+    working_dir: /app
+    environment:
+      NG_CLI_ANALYTICS: "false"
+    volumes:
+      - ./frontend:/app:z
+      - frontend_node_modules:/app/node_modules
+      - frontend_angular_cache:/app/.angular
+    # Port 80 im Container nutzt das bestehende Mapping 4200:80 aus der Basis-Datei.
+    # Polling erkennt Änderungen auch auf gemounteten Dateisystemen zuverlässig.
+    command:
+      - sh
+      - -c
+      - |
+        npm install --no-package-lock
+        exec npm start -- --host 0.0.0.0 --port 80 --poll 1000 --live-reload
+
+volumes:
+  frontend_node_modules:
+  frontend_angular_cache:

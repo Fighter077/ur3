@@ -1,9 +1,12 @@
-# --- Build ---
-FROM node:22-alpine AS build
+# --- Development (Node + Angular CLI) ---
+FROM node:22-alpine AS development
 WORKDIR /app
 COPY package.json ./
 RUN npm install
 COPY . .
+
+# --- Production build ---
+FROM development AS build
 RUN npm run build
 
 # --- Serve ---

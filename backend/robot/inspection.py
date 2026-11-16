@@ -21,12 +21,14 @@ import json
 import math
 import os
 import threading
+import time
 from typing import Optional
 
 import frames
 import sim
 from config import config
 from inventory import get_inventory
+from part_types import detected_part_type
 from perception import get_reader
 from robot import get_controller
 
@@ -41,11 +43,24 @@ DEFAULT_POSES = {
     "back":       [0.20, 0.00, 0.35, 0.0, PI, PI],     # 180° gedreht -> Rückseite
     "collection": [0.10, 0.25, 0.10, 0.0, PI, 0.0],    # Ablage / Collection-Area
 }
-POSE_NAMES = list(DEFAULT_POSES.keys())
+POSE_NAMES = list(DEFAULT_POSES.keys()) + ["back_clearance"]
 
 
 class _Aborted(Exception):
     """Interner Abbruch der laufenden Sequenz (z. B. per ESC)."""
+
+
+def _pose_reached(cur, target) -> bool:
+    """True, wenn die aktuelle TCP-Pose `cur` die Ziel-Pose `target` erreicht hat – geprüft über
+    ALLE 6 Freiheitsgrade (Position UND Orientierung). Nur Position zu prüfen genügt nicht: z. B.
+    ist 'back' lagegleich zu 'front' und unterscheidet sich nur in der Orientierung (180°-Drehung);
+    eine reine Positionsprüfung würde die Fahrt sofort als 'fertig' melden und die nächste Bewegung
+    starten, bevor die Drehung läuft -> Überschneidung -> 'Another thread is controlling the robot'."""
+    if not cur or len(cur) < 6:
+        return False
+    pos_ok = all(abs(cur[i] - target[i]) <= config.MOVE_POS_TOL_M for i in range(3))
+    rot_ok = all(abs(cur[i] - target[i]) <= config.MOVE_ROT_TOL_RAD for i in range(3, 6))
+    return pos_ok and rot_ok
 
 
 class InspectionCell:
@@ -55,7 +70,8 @@ class InspectionCell:
         self._running = False
         self._abort = False
         self._state = {"state": "idle", "step": "", "part_type": None,
-                       "progress": 0.0, "record_id": None, "error": None}
+                       "progress": 0.0, "record_id": None, "error": None,
+                       "capture_active": False}
         self.poses = self._load_poses()
 
     # ---- Posen (Datei) ----
@@ -65,7 +81,7 @@ class InspectionCell:
             with open(config.POSES_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for k, v in data.items():
-                if k in DEFAULT_POSES and isinstance(v, list) and len(v) == 6:
+                if k in POSE_NAMES and isinstance(v, list) and len(v) == 6:
                     poses[k] = [float(x) for x in v]
             print(f"[inspection] Posen aus {config.POSES_FILE} geladen: {sorted(data.keys())}")
         except FileNotFoundError:
@@ -82,7 +98,7 @@ class InspectionCell:
 
     def teach_pose(self, name: str) -> dict:
         """Aktuelle TCP-Pose des (echten oder Mock-)Roboters als `name` speichern."""
-        if name not in DEFAULT_POSES:
+        if name not in POSE_NAMES:
             return {"ok": False, "error": f"unbekannte Pose '{name}'", "names": POSE_NAMES}
         pose = get_controller().get_state().get("tcp_pose")
         if not pose or len(pose) != 6:
@@ -106,7 +122,9 @@ class InspectionCell:
             return self._running
 
     def start(self, part_type: Optional[str] = None, source: str = "manual") -> dict:
-        part_type = part_type or (config.PART_TYPES[0] if config.PART_TYPES else "HDD")
+        part_type = part_type or "auto"
+        if part_type != "auto" and part_type not in config.PART_TYPES:
+            return {"ok": False, "error": f"Unknown part type: {part_type}"}
         with self._lock:
             if self._running:
                 return {"ok": False, "error": "inspection already running"}
@@ -137,6 +155,21 @@ class InspectionCell:
 
     # ---- Capture + OCR über mehrere Frames im Zeitfenster ----
     async def _capture_side(self, loop, reader) -> tuple:
+        self._ck()
+        await self._set_capture_active(True)
+        try:
+            return await self._read_side(loop, reader)
+        finally:
+            await self._set_capture_active(False)
+
+    async def _set_capture_active(self, active: bool):
+        with self._lock:
+            self._state["capture_active"] = active
+            snap = dict(self._state)
+        from websocket_hub import broadcast
+        await broadcast({"type": "inspection", **snap})
+
+    async def _read_side(self, loop, reader) -> tuple:
         best, best_frame, best_score = None, None, -1
         # OpenAI ist pro Bild zuverlässig -> 1 Call/Seite (spart API-Kosten); lokale Engines mehrfach.
         n = 1 if config.OCR_ENGINE == "openai" else max(1, config.OCR_ATTEMPTS)
@@ -144,6 +177,7 @@ class InspectionCell:
             if self._abort:
                 break
             await asyncio.sleep(config.INSPECT_SETTLE_S / n)
+            self._ck()
             fr = frames.best_for_ocr()   # scharfes Hi-Res-Standbild bevorzugt
             res = await loop.run_in_executor(None, reader.read, fr)
             score = (10 if res.get("status") == "identified" else 0) + len(res.get("raw_text", ""))
@@ -160,15 +194,44 @@ class InspectionCell:
         reader = await loop.run_in_executor(None, get_reader)
         inv = get_inventory()
 
-        async def move_to(name):
+        async def move_to(name, speed=None):
             # Asynchrone Fahrt starten und auf Zielerreichung ODER Abbruch warten -> ESC/Not-Halt
-            # kann die Bewegung sofort unterbrechen (stop() läuft dann zwischen den is_busy-Abfragen).
-            await loop.run_in_executor(None, lambda: robot.move_tcp(self.poses[name]))
+            # kann die Bewegung sofort unterbrechen (stop() läuft zwischen den Abfragen).
+            # Zielpose, Stillstand UND Ende des robotseitigen Async-Threads abwarten.
+            target = self.poses.get(name)
+            if target is None:
+                raise ValueError(f"Missing taught pose: {name}")
+            self._ck()
+            before = await loop.run_in_executor(None, robot.get_state)
+            print(f"[inspection][motion] MoveL {name}: "
+                  f"from={before.get('tcp_pose')} target={target} "
+                  f"joints={before.get('joints')}", flush=True)
+            await loop.run_in_executor(None, lambda: robot.move_tcp(target, speed=speed))
+            deadline = time.monotonic() + config.MOVE_TIMEOUT_S
+            stable_since = None
+            stable_for = max(0.1, config.INSPECT_STILL_S) if name in ("front", "back") else 0.1
             while not self._abort:
-                if not await loop.run_in_executor(None, robot.is_busy):
-                    break
+                st = await loop.run_in_executor(None, robot.get_state)
+                # Fahrt gilt erst als beendet, wenn die VOLLE Ziel-Pose erreicht ist UND die Gelenke
+                # stehen -> die nächste Bewegung startet garantiert nicht in eine laufende hinein.
+                at_rest = _pose_reached(st.get("tcp_pose") or [], target) and not st.get("moving")
+                if at_rest and not await loop.run_in_executor(None, robot.is_busy):
+                    now = time.monotonic()
+                    if stable_since is None:
+                        stable_since = now
+                    if now - stable_since >= stable_for:
+                        break
+                else:
+                    stable_since = None
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"MoveL '{name}' timed out: target={target}, "
+                        f"actual={st.get('tcp_pose')}, joints={st.get('joints')}, "
+                        f"safety_mode={st.get('safety_mode')}"
+                    )
                 await asyncio.sleep(0.05)
             self._ck()
+            print(f"[inspection][motion] reached {name}", flush=True)
 
         try:
             await self._set("PICK", "pick", part_type, 0.05)
@@ -178,7 +241,12 @@ class InspectionCell:
             else:
                 sim.set_state(mode="inspect", x=0.75, y=0.62, holding=False, opening=1.0,
                               action="greift Teil aus Halter")
+                await move_to("holder_up")
+                self._ck()
+                await loop.run_in_executor(None, robot.set_gripper, False)
+                await asyncio.sleep(config.STEP_PAUSE_S)
                 await move_to("holder")
+                self._ck()
                 await loop.run_in_executor(None, robot.set_gripper, True)
                 sim.set_state(holding=True, opening=0.0)
                 await asyncio.sleep(config.STEP_PAUSE_S)
@@ -196,8 +264,15 @@ class InspectionCell:
             # --- Inspektion: Rückseite ---
             await self._set("INSPECT", "back", part_type, 0.55)
             sim.set_state(action="Rückseite (180° gedreht) – Label zeigen")
-            await move_to("back")
+            await move_to("back", speed=config.INSPECT_FLIP_SPEED)
             res_back, back = await self._capture_side(loop, reader)
+
+            self._ck()
+            if part_type == "auto":
+                part_type = detected_part_type(res_front, res_back) or "unknown"
+            await self._set("INSPECT", "back_clearance", part_type, 0.65)
+            sim.set_state(action="Abstand zum Bildschirm herstellen")
+            await move_to("back_clearance")
 
             self._ck()
             # --- OCR-Ergebnis / Datensatz ---
@@ -214,7 +289,7 @@ class InspectionCell:
                 "capacity": best.get("capacity") or best.get("speed"),
                 "condition": "unrated",
                 "ocr_text": (res_front.get("raw_text", "") + "\n---\n" + res_back.get("raw_text", "")).strip(),
-                "status": best.get("status", "review"),
+                "status": best.get("status", "review") if part_type != "unknown" else "review",
                 "source": source,
             })
             img_front = inv.save_image(rec["id"], "front", front)
@@ -226,7 +301,7 @@ class InspectionCell:
 
             self._ck()
             # --- Sortieren / Ablage ---
-            identified = best.get("status") == "identified"
+            identified = best.get("status") == "identified" and part_type != "unknown"
             await self._set("SORT", "collection" if identified else "review",
                             part_type, 0.90, record_id=rec["id"])
             sim.set_state(mode="inspect", x=0.2 if identified else 0.8, y=0.72, holding=True,
@@ -247,12 +322,16 @@ class InspectionCell:
             except Exception:
                 pass
         except Exception as e:
+            import traceback
+            print(f"[inspection][DIAG] Zyklus-Fehler: {e!r}", flush=True)
+            traceback.print_exc()
             await self._set("ERROR", "error", part_type, 0.0, error=str(e))
             try:
                 await loop.run_in_executor(None, robot.stop)
             except Exception:
                 pass
         finally:
+            await self._set_capture_active(False)
             with self._lock:
                 self._running = False
                 self._abort = False

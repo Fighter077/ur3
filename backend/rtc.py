@@ -3,8 +3,8 @@
 Zwei Aufgaben pro Frame:
   1. Frame in den gemeinsamen Puffer legen (frames.set_frame) -> die Inspektionssequenz greift
      am Haltepunkt das aktuelle Bild des Teils ab (für Label-Foto/OCR).
-  2. MediaPipe-Hände + Gesten-Trigger auswerten: hält der Arbeiter die Trigger-Geste stabil,
-     wird der Inspektionszyklus gestartet (Poster: "gesture / button", standalone).
+  2. MediaPipe-Hände + Gesten-Trigger auswerten: eine stabile Trigger-Geste meldet sich beim
+     zugehörigen Frontend, das denselben Startpfad wie Button/Leertaste benutzt.
 
 Struktur nahe der trafficSigns-Referenz (frame_reader + Queue der Größe 1 = immer nur das
 neueste Frame verarbeiten).
@@ -22,6 +22,7 @@ import frames
 import sim
 from config import config
 from perception import Detector, HandDetector
+from perception.gesture_trigger import GestureTrigger
 from websocket_hub import send_to
 from robot.inspection import get_cell
 
@@ -93,6 +94,7 @@ async def _process_frames(client_id: str, latest: asyncio.Queue):
     last_ts = 0.0
     last_hands, last_objects = [], []
     errors = 0
+    trigger = GestureTrigger()
     while True:
         try:
             frame = await latest.get()
@@ -100,8 +102,12 @@ async def _process_frames(client_id: str, latest: asyncio.Queue):
             frames.set_frame(img)  # für die Inspektionssequenz
             now = time.time() * 1000
 
+            gesture_triggered = False
             if counter % config.DETECT_EVERY_N == 0:
                 last_hands, last_objects = await loop.run_in_executor(None, _perceive, img)
+                gesture_triggered = trigger.update(
+                    last_hands if sim.gesture_enabled() else []
+                )["triggered"]
             hands, objects = last_hands, last_objects
 
             # Virtueller Greifer: im Leerlauf der Hand folgen + Übergabe erkennen; während eines
@@ -110,11 +116,11 @@ async def _process_frames(client_id: str, latest: asyncio.Queue):
                 sim_state = sim.snapshot()
                 handover = {"active": False, "progress": 1.0}
             else:
-                sim_state, triggered, progress = sim.update_idle(hands)
+                sim_state, _triggered, progress = sim.update_idle(hands)
                 handover = {"active": bool(hands), "progress": progress}
-                if triggered:
-                    res = get_cell().start(source="handover")
-                    print(f"[rtc] Übergabe -> Inspektion: {res}")
+                if gesture_triggered:
+                    # Gleicher Frontend-Startpfad wie Button/Leertaste, inklusive Teiletyp.
+                    await send_to(client_id, {"type": "gesture_trigger"})
 
             await send_to(client_id, {
                 "type": "analysis",

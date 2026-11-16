@@ -1,4 +1,5 @@
-import { ChangeDetectorRef, Component, ElementRef, HostListener, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectorRef, Component, ElementRef, HostListener, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatToolbarModule } from '@angular/material/toolbar';
@@ -42,7 +43,7 @@ const HAND_EDGES: [number, number][] = [
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss',
 })
-export class AppComponent implements OnInit, OnDestroy {
+export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('video') videoEl!: ElementRef<HTMLVideoElement>;
 
   connectionState = 'disconnected';
@@ -52,13 +53,16 @@ export class AppComponent implements OnInit, OnDestroy {
   inspection: InspectionState | null = null;
   inventory: InventoryRecord[] = [];
 
-  partTypes = ['HDD', 'optical', 'RAM'];
-  partType = 'HDD';
+  partTypes = ['auto', 'HDD', 'optical', 'RAM'];
+  partType = 'auto';
   controlMode: 'gesture' | 'spacebar' = 'gesture';
   robotUseReal = false;              // false = Simulation (Mock), true = echter UR3e
   robotIp = '192.168.1.100';
   jogSpeed = 0.03;
-  poseNames = ['home', 'holder', 'holder_up', 'front', 'back', 'collection'];
+  poseNames = ['home', 'holder', 'holder_up', 'front', 'back', 'back_clearance', 'collection'];
+  private flashSuppressed = false;
+  private startPending = false;
+  private destroyed = false;
   invColumns = ['id', 'type', 'manufacturer', 'model', 'capacity', 'status', 'images', 'actions'];
   // Ablaufschritte in Reihenfolge (i18n-Keys; Reihenfolge = Ablauf)
   steps = ['steps.pick', 'steps.front', 'steps.back', 'steps.read', 'steps.sort', 'steps.done'];
@@ -69,7 +73,6 @@ export class AppComponent implements OnInit, OnDestroy {
   gx = 0.5; gy = 0.16; gOpen = 1;
   gHolding = false; gMode = 'ready'; gAction = 'bereit';
   handoverProgress = 0; handoverActive = false;
-  private flashSuppressed = false;   // ESC schaltet den Flash sofort aus (ohne Backend-Roundtrip)
   private raf = 0;
 
   constructor(
@@ -79,18 +82,27 @@ export class AppComponent implements OnInit, OnDestroy {
     private snack: MatSnackBar,
     private t: TranslateService,
   ) {
-    this.svc.connectionState$.subscribe((s) => {
+    this.svc.connectionState$.pipe(takeUntilDestroyed()).subscribe((s) => {
       this.connectionState = s;
       this.connected = s === 'connected';
+      if (this.connected) this.svc.setControlMode(this.controlMode);
+      else this.startPending = false;
     });
-    this.svc.robotState$.subscribe((r) => (this.robot = r));
-    this.svc.analysis$.subscribe((a) => this.onAnalysis(a));
-    this.svc.inspection$.subscribe((i) => {
+    this.svc.robotState$.pipe(takeUntilDestroyed()).subscribe((r) => (this.robot = r));
+    this.svc.analysis$.pipe(takeUntilDestroyed()).subscribe((a) => this.onAnalysis(a));
+    this.svc.inspection$.pipe(takeUntilDestroyed()).subscribe((i) => {
       this.inspection = i;
-      if (i?.state === 'PICK') this.flashSuppressed = false; // neuer Zyklus -> Flash wieder erlauben
+      if (i && i.state !== 'idle') this.startPending = false;
+      if (i?.state === 'PICK') this.flashSuppressed = false;
     });
-    this.svc.inventory$.subscribe((inv) => (this.inventory = inv));
-    this.svc.ack$.subscribe((a) => this.onAck(a));
+    this.svc.inventory$.pipe(takeUntilDestroyed()).subscribe((inv) => (this.inventory = inv));
+    this.svc.ack$.pipe(takeUntilDestroyed()).subscribe((a) => this.onAck(a));
+    this.svc.gestureTrigger$.pipe(takeUntilDestroyed()).subscribe(() => {
+      if (this.controlMode === 'gesture') this.startInspection('gesture');
+    });
+    this.svc.cameraError$.pipe(takeUntilDestroyed()).subscribe((message) => {
+      this.snack.open(message, 'OK', { duration: 6000 });
+    });
   }
 
   private onAck(a: any) {
@@ -111,6 +123,7 @@ export class AppComponent implements OnInit, OnDestroy {
     } else if (a.action === 'abort_inspection') {
       if (a.result?.was_running) this.snack.open(this.t.instant('ack.aborted'), 'OK', { duration: 2500 });
     } else if (a.action === 'start_inspection' && !a.ok) {
+      this.startPending = false;
       this.snack.open(this.t.instant('ack.startFailed', { error: a.result?.error || '' }), 'OK', { duration: 2500 });
     } else if (a.ok === false && a.error) {
       this.snack.open(this.t.instant('ack.error', { error: a.error }), 'OK', { duration: 2500 });
@@ -135,8 +148,16 @@ export class AppComponent implements OnInit, OnDestroy {
       this.raf = requestAnimationFrame(tick);
     });
   }
+  ngAfterViewInit() {
+    queueMicrotask(() => {
+      if (!this.destroyed) void this.svc.connect(this.videoEl.nativeElement);
+    });
+  }
+
   ngOnDestroy() {
+    this.destroyed = true;
     cancelAnimationFrame(this.raf);
+    this.svc.disconnect(this.videoEl?.nativeElement);
   }
 
   private onAnalysis(a: Analysis | null) {
@@ -169,11 +190,10 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   async toggleConnection() {
-    if (this.connected || this.connectionState === 'connecting…') {
+    if (this.connected || this.connectionState === 'connecting…' || this.connectionState === 'reconnecting…') {
       this.svc.disconnect(this.videoEl.nativeElement);
     } else {
       await this.svc.connect(this.videoEl.nativeElement);
-      this.svc.setControlMode(this.controlMode); // Backend den aktuellen Modus mitteilen
     }
   }
 
@@ -190,21 +210,21 @@ export class AppComponent implements OnInit, OnDestroy {
   @HostListener('window:keydown', ['$event'])
   onKeydown(e: KeyboardEvent) {
     if (e.code === 'Escape') {        // ESC bricht die laufende Sequenz sofort ab
-      this.flashSuppressed = true;    // Flash SOFORT aus (vor dem Backend-Roundtrip)
+      this.flashSuppressed = true;
       this.svc.abortInspection();
       return;
     }
     if (e.code !== 'Space' || this.controlMode !== 'spacebar') return;
-    const tag = (e.target as HTMLElement)?.tagName;
-    if (tag && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(tag)) return; // nicht in Eingaben/Buttons
+    if (e.target instanceof HTMLElement &&
+        e.target.closest('input, textarea, select, button, [contenteditable="true"], [role="combobox"]')) return;
     e.preventDefault();
-    if (this.connected && !this.cycleRunning) this.startInspection();
+    if (!e.repeat && !e.isComposing) this.startInspection('spacebar');
   }
 
   // --- Inspektion ---
   get cycleRunning(): boolean {
     const s = this.inspection?.state;
-    return !!s && s !== 'idle' && s !== 'DONE' && s !== 'ERROR';
+    return this.startPending || (!!s && s !== 'idle' && s !== 'DONE' && s !== 'ERROR' && s !== 'ABORTED');
   }
 
   // Welcher Schritt ist gerade aktiv? (Index in `steps`)
@@ -213,7 +233,7 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!ins) return -1;
     switch (ins.state) {
       case 'PICK': return 0;
-      case 'INSPECT': return ins.step === 'back' ? 2 : 1;
+      case 'INSPECT': return ins.step.startsWith('back') ? 2 : 1;
       case 'READ': return 3;
       case 'SORT': return 4;
       case 'DONE': return 5;
@@ -230,12 +250,10 @@ export class AppComponent implements OnInit, OnDestroy {
     return s === 'done' ? 'check_circle' : s === 'current' ? 'radio_button_checked' : 'radio_button_unchecked';
   }
 
-  // Weißer Aufhell-"Blitz" genau während der Foto-Aufnahme (Inspektionsposen vor der Kamera).
-  get flashOn(): boolean {
-    return !this.flashSuppressed && this.inspection?.state === 'INSPECT';
-  }
-  startInspection() {
-    this.svc.startInspection(this.partType);
+  startInspection(source: 'manual' | 'spacebar' | 'gesture' = 'manual') {
+    if (!this.connected || this.cycleRunning) return;
+    this.startPending = true;
+    if (!this.svc.startInspection(this.partType, source)) this.startPending = false;
   }
   markReviewed(rec: InventoryRecord) {
     this.svc.markReviewed(rec.id);
@@ -249,7 +267,15 @@ export class AppComponent implements OnInit, OnDestroy {
     this.svc.jog(axis, dir * this.jogSpeed);
   }
   stopJog() { this.svc.stopJog(); }
-  estop() { this.svc.stop(); }
+  get flashOn(): boolean {
+    return this.connected && !this.flashSuppressed &&
+      this.robot !== null && !this.robot.moving &&
+      this.inspection?.state === 'INSPECT' && this.inspection?.capture_active === true;
+  }
+  estop() {
+    this.flashSuppressed = true;
+    this.svc.abortInspection();
+  }
   gripper(closed: boolean) { this.svc.gripper(closed); }
   teachPose(name: string) { this.svc.teachPose(name); }
 

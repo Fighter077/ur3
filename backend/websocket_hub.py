@@ -57,6 +57,9 @@ def _handle_command(cmd: dict) -> dict:
     action = cmd.get("action")
 
     try:
+        if action in ("move_tcp", "move_joints", "jog", "approach_until_contact",
+                      "set_robot", "teach_pose", "gripper") and get_cell().running:
+            raise RobotError("Inspection is running; abort it before manual control.")
         if action == "move_tcp":
             robot.move_tcp(cmd["pose"], cmd.get("speed"), cmd.get("accel"))
         elif action == "move_joints":
@@ -68,7 +71,7 @@ def _handle_command(cmd: dict) -> dict:
                 speed=cmd.get("speed"),
             )
         elif action == "stop":
-            robot.stop()
+            get_cell().abort()
         elif action == "gripper":
             robot.set_gripper(bool(cmd.get("closed", False)))
         elif action == "approach_until_contact":
@@ -80,7 +83,10 @@ def _handle_command(cmd: dict) -> dict:
             return {"type": "ack", "action": action, "ok": True, "result": res}
         # --- Inspektion / Inventar ---
         elif action == "start_inspection":
-            res = get_cell().start(cmd.get("part_type"), source="manual")
+            source = cmd.get("source", "manual")
+            if source not in ("manual", "spacebar", "gesture"):
+                raise RobotError("Unknown inspection trigger source")
+            res = get_cell().start(cmd.get("part_type"), source=source)
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
         elif action == "abort_inspection":
             res = get_cell().abort()

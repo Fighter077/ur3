@@ -51,6 +51,28 @@ Alternativ ohne Compose: `./scripts/podman-up.sh` (startet dieselben Container p
 - Backend-Health: <http://localhost:8080/health>
 - Logs: `podman compose logs -f backend` · Stoppen: `podman compose down`
 
+Für Entwicklung mit automatischem Reload beider Dienste:
+
+```bash
+podman compose -f docker-compose.dev.yml up -d --build
+```
+
+Das Frontend nutzt `ng serve` unter <http://localhost:4200> und lädt Änderungen aus `frontend/`
+automatisch nach (Polling alle 1000 ms). Node-Abhängigkeiten und Angular-Cache liegen in eigenen
+Volumes. Das Backend startet bei Python-Änderungen neu. `./scripts/dev-watch.sh` startet beide
+Dienste und folgt ihren Logs. Nach Änderungen an `package.json` den Frontend-Container neu
+starten, damit `npm install` die Abhängigkeiten aktualisiert.
+
+Die Seite verbindet sich beim Laden automatisch mit dem Backend und versucht nach einem
+Verbindungsabbruch alle 1,5 Sekunden erneut zu verbinden (auch nach Backend-Reload).
+Manuelles Trennen beendet diese Versuche. Kamera-Zugriff wird separat angefragt; ohne Kamera
+bleiben Button und Leertaste nutzbar. Im gewählten Modus starten Leertaste bzw. die konfigurierte,
+stabil gehaltene Geste dieselbe vollständige Sequenz wie der Start-Button, mit dem ausgewählten
+Teiletyp. Standard ist **Auto-detect**: OCR/Vision bestimmt HDD, RAM oder optisches Laufwerk
+aus den Front-/Back-Aufnahmen. Unbekannte oder widersprüchliche Ergebnisse werden als
+`unknown` zur Review markiert. Eine manuelle Typ-Auswahl bleibt optional möglich. Die
+Erkennung verändert keine Roboterposen. Eine gehaltene Geste löst erst nach Loslassen erneut aus.
+
 Standard: **Simulation** (`ROBOT_MOCK=true`) – komplett ohne UR3e testbar. Der Inspektionszyklus
 läuft dann mit simulierten Bewegungen; ohne Kamera entstehen Datensätze ohne Bild (`review`).
 

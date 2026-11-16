@@ -98,6 +98,17 @@ Die sechs benötigten Posen: `home`, `holder`, `holder_up`, `front`, `back`, `co
    - `collection` = Ablage/Collection-Area, `home` = sichere Ausgangslage.
 5. Danach einen Zyklus starten – der Roboter fährt die geteachten Posen ab.
 
+Der Pickup fährt zuerst `holder_up` an, öffnet dort den Greifer, fährt zu `holder`, schließt
+den Greifer und fährt wieder zu `holder_up`. Die Bildschirm-Aufhellung ist nur nach erreichter
+Inspektionspose während des Aufnahme-/OCR-Fensters aktiv; die obere Steuerleiste bleibt sichtbar.
+Die Fahrt `front` → `back` nutzt `INSPECT_FLIP_SPEED` (Standard 0,15 m/s).
+Normale TCP-Fahrten nutzen `ROBOT_TCP_SPEED` (Standard 0,12 m/s). Vor der Aufhellung muss die
+volle Zielpose für `INSPECT_STILL_S` (Standard 0,3 s) durchgehend erreicht und der Roboter still sein.
+Nach der Rückseitenaufnahme fährt der Roboter direkt zur separat geteachten Pose
+`back_clearance`, dann zur Collection-Area. Es gibt keinen automatischen Hub über `back`.
+`back_clearance` kann über den gleichnamigen Teach-Button gespeichert werden. Die Transitbahnen
+müssen am Aufbau auf Reichweite und Freiraum geprüft werden.
+
 > Ohne `poses.json` nutzt das System die Platzhalter aus `DEFAULT_POSES` (nur fürs Mock sinnvoll).
 
 ## 5. Greifer anbinden

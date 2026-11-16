@@ -19,12 +19,22 @@ class Config:
     # Ohne echten Roboter: Mock-Controller (simuliert Bewegungen, keine Hardware nötig).
     ROBOT_MOCK = _as_bool(os.getenv("ROBOT_MOCK"), default=True)
     # Geschwindigkeits-/Beschleunigungs-Defaults (SI: m/s, m/s^2 bzw. rad)
-    ROBOT_TCP_SPEED = float(os.getenv("ROBOT_TCP_SPEED", "0.1"))
+    ROBOT_TCP_SPEED = float(os.getenv("ROBOT_TCP_SPEED", "0.12"))
     ROBOT_TCP_ACCEL = float(os.getenv("ROBOT_TCP_ACCEL", "0.3"))
+    # Separate TCP-Geschwindigkeit nur für die Fahrt front -> back (m/s).
+    INSPECT_FLIP_SPEED = float(os.getenv("INSPECT_FLIP_SPEED", "0.15"))
+    # Kamera-Aufhellung erst nach durchgehend ruhiger Zielpose aktivieren.
+    INSPECT_STILL_S = float(os.getenv("INSPECT_STILL_S", "0.3"))
     ROBOT_JOINT_SPEED = float(os.getenv("ROBOT_JOINT_SPEED", "0.5"))
     ROBOT_JOINT_ACCEL = float(os.getenv("ROBOT_JOINT_ACCEL", "0.8"))
     # Sicherheits-Kraftschwelle [N] für die kraftgeregelte Entnahme / Handover-Stopp.
     ROBOT_FORCE_THRESHOLD = float(os.getenv("ROBOT_FORCE_THRESHOLD", "20.0"))
+    # Fahrt gilt als beendet, wenn die TCP-Position bis auf MOVE_POS_TOL_M [m] am Ziel ist und die
+    # Gelenke stehen. MOVE_TIMEOUT_S [s] ist die Sicherheits-Obergrenze pro Einzelfahrt, falls das
+    # Ziel (z. B. bei Schutzstopp) nie erreicht wird -> Sequenz bleibt nicht hängen.
+    MOVE_POS_TOL_M = float(os.getenv("MOVE_POS_TOL_M", "0.002"))     # 2 mm Positionstoleranz
+    MOVE_ROT_TOL_RAD = float(os.getenv("MOVE_ROT_TOL_RAD", "0.02"))  # ~1.1° Orientierungstoleranz
+    MOVE_TIMEOUT_S = float(os.getenv("MOVE_TIMEOUT_S", "30.0"))
     # --- Greifer / Endeffektor ---
     # none    = nur Statusflag (Platzhalter)
     # digital = UR-Digital-Ausgang schalten (einfachste Hardware-Anbindung, z. B. Pneumatik/Relais)

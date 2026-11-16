@@ -4,7 +4,8 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
-    "build": "ng build"
+    "build": "ng build",
+    "test": "node tests/connection-and-triggers.test.cjs"
   },
   "private": true,
   "dependencies": {

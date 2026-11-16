@@ -1,4 +1,4 @@
-<mat-toolbar color="primary" class="!h-auto flex-wrap gap-2 py-2">
+<mat-toolbar color="primary" class="control-toolbar !h-auto flex-wrap gap-2 py-2">
   <mat-icon>precision_manufacturing</mat-icon>
   <span class="font-medium">{{ 'app.title' | translate }}</span>
   <span class="flex-1"></span>
@@ -11,7 +11,7 @@
         style="background: var(--warn); color: #231a00;">{{ 'status.sim' | translate }}</span>
   <button mat-flat-button (click)="toggleConnection()">
     <mat-icon>{{ connected ? 'link_off' : 'link' }}</mat-icon>
-    {{ (connected || connectionState === 'connecting…' ? 'status.disconnect' : 'status.connect') | translate }}
+    {{ (connected || connectionState === 'connecting…' || connectionState === 'reconnecting…' ? 'status.disconnect' : 'status.connect') | translate }}
   </button>
   <button mat-flat-button color="warn" (click)="estop()" [disabled]="!connected">
     <mat-icon>pan_tool</mat-icon> {{ 'status.estop' | translate }}
@@ -98,7 +98,7 @@
             <mat-form-field appearance="outline" subscriptSizing="dynamic" class="w-40">
               <mat-label>{{ 'cycle.partType' | translate }}</mat-label>
               <mat-select [(ngModel)]="partType" [disabled]="cycleRunning">
-                <mat-option *ngFor="let p of partTypes" [value]="p">{{ p }}</mat-option>
+                <mat-option *ngFor="let p of partTypes" [value]="p">{{ p === 'auto' ? ('cycle.autoType' | translate) : p }}</mat-option>
               </mat-select>
             </mat-form-field>
             <button mat-raised-button color="primary" (click)="startInspection()"
@@ -107,7 +107,13 @@
             </button>
           </div>
 
+          <p class="text-xs mt-2" style="color: var(--muted);" *ngIf="partType === 'auto'">
+            {{ 'cycle.autoHint' | translate }}
+          </p>
           <div *ngIf="inspection as ins" class="mt-3">
+            <p *ngIf="ins.part_type && ins.part_type !== 'auto'" class="text-sm mb-2">
+              {{ 'cycle.detectedType' | translate }}: {{ ins.part_type }}
+            </p>
             <div class="flex justify-between text-sm">
               <span style="color: var(--muted);">{{ 'cycle.status' | translate }}</span>
               <code>{{ ins.state }}<span *ngIf="ins.step"> · {{ ins.step }}</span></code>
@@ -238,5 +244,5 @@
   </mat-card>
 </div>
 
-<!-- Aufhell-"Blitz": weißes Vollbild während der Foto-Aufnahme (bessere Belichtung des Labels) -->
+<!-- Lighting is enabled by the backend only after arrival at an inspection pose. -->
 <div class="flash" [class.on]="flashOn" aria-hidden="true"></div>

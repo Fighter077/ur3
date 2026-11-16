@@ -35,6 +35,9 @@
   "cycle": {
     "title": "Inspection cycle",
     "partType": "Part type",
+    "autoType": "Auto-detect",
+    "autoHint": "The camera identifies the part during inspection. Uncertain results go to review.",
+    "detectedType": "Part type",
     "start": "Start cycle",
     "status": "Status",
     "error": "Error: {{error}}",

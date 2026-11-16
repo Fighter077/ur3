@@ -22,6 +22,9 @@ services:
       - ROBOT_IP=${ROBOT_IP:-192.168.1.100}
       - YOLO_DEVICE=${YOLO_DEVICE:-cpu}
       - GRIPPER_TYPE=${GRIPPER_TYPE:-none}
+      - INSPECT_FLIP_SPEED=${INSPECT_FLIP_SPEED:-0.15}
+      - ROBOT_TCP_SPEED=${ROBOT_TCP_SPEED:-0.12}
+      - INSPECT_STILL_S=${INSPECT_STILL_S:-0.3}
       # OCR-Engine + OpenAI (Key kommt aus der gitignorten .env, nie aus dem Repo)
       - OCR_ENGINE=${OCR_ENGINE:-easyocr}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

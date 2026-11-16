@@ -46,6 +46,14 @@ class RobotController(ABC):
                     accel: Optional[float] = None) -> None:
         """Gelenkbewegung (MoveJ) zu absoluten Gelenkwinkeln."""
 
+    def move_tcp_j(self, pose: List[float], speed: Optional[float] = None,
+                   accel: Optional[float] = None) -> None:
+        """Punkt-zu-Punkt zu einer TCP-Pose, aber im GELENKRAUM (MoveJ/IK) statt geradlinig.
+        Für Transitfahrten mit Gelenkinterpolation statt einer geraden TCP-Bahn.
+        Die Bahn muss separat auf Kollisionsfreiheit geprüft werden.
+        Default: Fallback auf move_tcp (z. B. Mock); die echte Hardware überschreibt mit moveJ_IK."""
+        self.move_tcp(pose, speed, accel)
+
     @abstractmethod
     def jog_tcp(self, dx=0.0, dy=0.0, dz=0.0, drx=0.0, dry=0.0, drz=0.0,
                 speed: Optional[float] = None) -> None:
@@ -172,6 +180,7 @@ class RTDEController(RobotController):
 
         self._ip = ip
         self._lock = threading.Lock()
+        self._motion_kind = None
         # ALLE Control-Interface-Aufrufe laufen über EINEN dedizierten Thread. ur_rtde ist nicht
         # thread-sicher; selbst sequenzielle Aufrufe aus wechselnden Threadpool-Threads lösen
         # "Another thread is controlling the robot" aus. Ein einziger Thread = keine Parallelität
@@ -188,6 +197,16 @@ class RTDEController(RobotController):
     def _ctrl(self, fn):
         """Führt eine Control-Operation auf dem dedizierten Thread aus und wartet auf das Ergebnis."""
         return self._ctrl_exec.submit(fn).result()
+
+    def _start_move(self, kind, fn):
+        def start():
+            if getattr(self, "_motion_kind", None) == "speed":
+                self._rtde_c.speedStop()
+                self._motion_kind = None
+            if not fn():
+                raise RobotError(f"{kind} command was rejected by the robot")
+            self._motion_kind = kind
+        self._ctrl(start)
 
     def is_connected(self) -> bool:
         try:
@@ -219,37 +238,64 @@ class RTDEController(RobotController):
 
     def move_tcp(self, pose, speed=None, accel=None):
         s, a = speed or config.ROBOT_TCP_SPEED, accel or config.ROBOT_TCP_ACCEL
-        # asynchronous=True -> Aufruf kehrt sofort zurück; der Zyklus wartet via is_busy().
-        # Dadurch kann stop() (ESC/Not-Halt) eine laufende Fahrt SOFORT unterbrechen.
-        self._ctrl(lambda: self._rtde_c.moveL(list(pose), s, a, True))
+        # asynchronous=True -> der Aufruf kehrt sofort zurück, der dedizierte ur-ctrl-Thread bleibt
+        # FREI. Nur so kann stop() (ESC/Not-Halt) eine laufende Fahrt sofort unterbrechen. Die
+        # inspection.move_to wartet auf Zielpose, Stillstand und Async-Thread-Ende.
+        self._start_move("linear", lambda: self._rtde_c.moveL(list(pose), s, a, True))
 
     def move_joints(self, q, speed=None, accel=None):
         s, a = speed or config.ROBOT_JOINT_SPEED, accel or config.ROBOT_JOINT_ACCEL
-        self._ctrl(lambda: self._rtde_c.moveJ(list(q), s, a, True))
+        self._start_move("joint", lambda: self._rtde_c.moveJ(list(q), s, a, True))
+
+    def move_tcp_j(self, pose, speed=None, accel=None):
+        """TCP-Ziel per IK und asynchronem MoveJ anfahren (rad/s, rad/s²)."""
+        s = config.ROBOT_JOINT_SPEED if speed is None else speed
+        a = config.ROBOT_JOINT_ACCEL if accel is None else accel
+        self._start_move("joint", lambda: self._rtde_c.moveJ_IK(list(pose), s, a, True))
 
     def jog_tcp(self, dx=0.0, dy=0.0, dz=0.0, drx=0.0, dry=0.0, drz=0.0, speed=None):
         v = [dx, dy, dz, drx, dry, drz]
-        self._ctrl(lambda: self._rtde_c.speedL(v, config.ROBOT_TCP_ACCEL))
+        if not any(v):
+            self.stop()
+            return
+        def jog():
+            if getattr(self, "_motion_kind", None) in ("linear", "joint"):
+                raise RobotError("Stop the current move before jogging")
+            if not self._rtde_c.speedL(v, config.ROBOT_TCP_ACCEL):
+                raise RobotError("Jog command was rejected by the robot")
+            self._motion_kind = "speed"
+        self._ctrl(jog)
 
     def stop(self):
         def _s():
-            self._rtde_c.speedStop()
-            self._rtde_c.stopL(2.0)
+            kind = getattr(self, "_motion_kind", None)
+            if kind == "speed":
+                self._rtde_c.speedStop()
+            elif kind == "joint":
+                self._rtde_c.stopJ(2.0)
+            else:
+                self._rtde_c.stopL(2.0)
+            self._motion_kind = None
         self._ctrl(_s)
 
     def is_busy(self) -> bool:
-        try:
-            return self._ctrl(lambda: self._rtde_c.getAsyncOperationProgress()) >= 0
-        except Exception:
-            return False
+        # Async-Status deckt in ur_rtde 1.6.0 auch einzelne MoveL/MoveJ ab.
+        # Ausschließlich auf dem Control-Thread lesen; Fehler nicht als "fertig" behandeln.
+        def busy():
+            active = self._rtde_c.getAsyncOperationProgress() >= 0
+            qd = self._rtde_r.getActualQd()
+            moving = bool(qd) and any(abs(v) > 1e-3 for v in qd)
+            if not active and not moving and getattr(self, "_motion_kind", None) in ("linear", "joint"):
+                self._motion_kind = None
+            return active or moving
+        return self._ctrl(busy)
 
     def approach_until_contact(self, direction, max_distance, force_threshold=None):
         thr = force_threshold or config.ROBOT_FORCE_THRESHOLD
         n = math.sqrt(sum(d * d for d in direction)) or 1.0
         unit = [d / n for d in direction]
         start = self._rtde_r.getActualTCPPose()
-        self._ctrl(lambda: self._rtde_c.speedL(
-            [unit[0] * 0.02, unit[1] * 0.02, unit[2] * 0.02, 0, 0, 0], config.ROBOT_TCP_ACCEL))
+        self.jog_tcp(dx=unit[0] * 0.02, dy=unit[1] * 0.02, dz=unit[2] * 0.02)
         contact = False
         traveled = 0.0
         while traveled < max_distance:

@@ -34,6 +34,9 @@ podman run -d --name ur3-backend \
   --restart unless-stopped \
   -e ROBOT_MOCK="$ROBOT_MOCK" \
   -e ROBOT_IP="$ROBOT_IP" \
+  -e INSPECT_FLIP_SPEED="${INSPECT_FLIP_SPEED:-0.15}" \
+  -e ROBOT_TCP_SPEED="${ROBOT_TCP_SPEED:-0.12}" \
+  -e INSPECT_STILL_S="${INSPECT_STILL_S:-0.3}" \
   -e YOLO_DEVICE="$YOLO_DEVICE" \
   -e YOLO_MODEL_PATH="$YOLO_MODEL_PATH" \
   -e PYTHONUNBUFFERED=1 \

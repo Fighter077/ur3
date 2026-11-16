@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 from config import config
+from part_types import infer_part_type
 
 _MANUFACTURERS = [
     "Seagate", "Western Digital", "WD", "Samsung", "Toshiba", "Hitachi", "HGST",
@@ -109,7 +110,7 @@ class LabelReader:
 
     def read(self, frame_bgr: Optional[np.ndarray]) -> dict:
         empty = {"raw_text": "", "manufacturer": None, "model": None,
-                 "capacity": None, "speed": None, "status": "review"}
+                 "capacity": None, "speed": None, "type": None, "status": "review"}
         if frame_bgr is None or not self.enabled:
             return empty
 
@@ -146,7 +147,7 @@ class LabelReader:
         "model (Modell-/Teilenummer), capacity (z.B. '1TB' oder '16GB'), "
         "speed (z.B. 'PC4-3200AA' oder '7200rpm', sonst null), type ('HDD'|'optical'|'RAM'|null), "
         "raw_text (der gesamte lesbare Text auf dem Etikett). Unbekannte Felder = null. "
-        "Antworte ausschliesslich mit dem JSON, ohne Erklaerung."
+        "Antworte ausschliesslich mit dem JSON, ohne Erklaerung. Überprüfe, ob die Werte plausibel sind."
     )
 
     def _openai_fields(self, img: np.ndarray) -> dict:
@@ -155,7 +156,7 @@ class LabelReader:
         import requests
 
         empty = {"raw_text": "", "manufacturer": None, "model": None,
-                 "capacity": None, "speed": None, "status": "review"}
+                 "capacity": None, "speed": None, "type": None, "status": "review"}
         ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
         if not ok:
             return empty
@@ -193,6 +194,7 @@ class LabelReader:
             "type": data.get("type") or None,
             "raw_text": (data.get("raw_text") or "").strip(),
         }
+        fields["type"] = infer_part_type(fields)
         identified = bool(fields["manufacturer"]) or (fields["model"] and fields["capacity"])
         fields["status"] = "identified" if identified else "review"
         return fields
@@ -251,6 +253,7 @@ class LabelReader:
         candidates = [t for t in _MODEL_RE.findall(text) if not _CAP_RE.fullmatch(t)]
         if candidates:
             out["model"] = max(candidates, key=len)
+        out["type"] = infer_part_type({**out, "raw_text": text})
         return out
 
 
