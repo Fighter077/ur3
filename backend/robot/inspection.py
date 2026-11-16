@@ -114,10 +114,11 @@ class InspectionCell:
     # ---- Capture + OCR über mehrere Frames im Zeitfenster ----
     async def _capture_side(self, loop, reader) -> tuple:
         best, best_frame, best_score = None, None, -1
-        n = max(1, config.OCR_ATTEMPTS)
+        # OpenAI ist pro Bild zuverlässig -> 1 Call/Seite (spart API-Kosten); lokale Engines mehrfach.
+        n = 1 if config.OCR_ENGINE == "openai" else max(1, config.OCR_ATTEMPTS)
         for _ in range(n):
             await asyncio.sleep(config.INSPECT_SETTLE_S / n)
-            fr = frames.get_frame()
+            fr = frames.best_for_ocr()   # scharfes Hi-Res-Standbild bevorzugt
             res = await loop.run_in_executor(None, reader.read, fr)
             score = (10 if res.get("status") == "identified" else 0) + len(res.get("raw_text", ""))
             if score > best_score:
@@ -128,7 +129,9 @@ class InspectionCell:
     async def _run_cycle(self, part_type: str, source: str):
         loop = asyncio.get_running_loop()
         robot = get_controller()
-        reader = get_reader()
+        # Reader-Konstruktion (EasyOCR/Torch) kann mehrere Sekunden dauern -> im Executor,
+        # damit der Event-Loop (und WebRTC) nicht blockiert. Beim Warmup ist er meist schon da.
+        reader = await loop.run_in_executor(None, get_reader)
         inv = get_inventory()
 
         def move(name):

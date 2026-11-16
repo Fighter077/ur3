@@ -5,9 +5,9 @@ backend/__pycache__/
 *.pyc
 backend/snapshots/
 
-# Modelle (groß / zur Laufzeit bezogen -> nicht ins Git)
-backend/models/*.pt
-backend/models/*.task
+# Modelle (groß / zur Laufzeit bezogen -> nicht ins Git): YOLO, MediaPipe,
+# EasyOCR (models/easyocr/*.pth), HuggingFace-Cache (models/hf/) usw.
+backend/models/
 
 # Laufzeitdaten: Inventar (DPP), Label-Bilder, geteachte Posen
 backend/data/

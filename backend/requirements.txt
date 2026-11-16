@@ -17,7 +17,10 @@ ultralytics==8.3.40
 mediapipe==1.2.3
 
 # --- OCR (Label lesen) ---
-# pytesseract = dünner Wrapper um die Tesseract-Binary (apt-Paket tesseract-ocr, siehe Dockerfile).
+# EasyOCR = neuronales OCR (robust bei Foto-Text). numpy ohne Obergrenze -> ok mit numpy 2.1.1.
+# Nutzt torch (schon installiert); Modelle werden zur Laufzeit nach EASYOCR_DIR geladen.
+easyocr==1.7.2
+# pytesseract = Fallback-Engine (OCR_ENGINE=tesseract), dünner Wrapper um die Tesseract-Binary.
 pytesseract==0.3.13
 
 # --- Roboter (RTDE) ---

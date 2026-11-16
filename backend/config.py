@@ -59,7 +59,20 @@ class Config:
 
     # --- OCR (Label lesen) ---
     OCR_ENABLED = _as_bool(os.getenv("OCR_ENABLED"), default=True)
-    OCR_LANG = os.getenv("OCR_LANG", "eng")
+    # Engine: "openai" (Vision-LLM, liest + parst Marke/Spezifikation direkt – braucht Internet +
+    # OPENAI_API_KEY), "easyocr" (lokal, neuronal) oder "tesseract" (lokal, leicht).
+    OCR_ENGINE = os.getenv("OCR_ENGINE", "easyocr")
+    # OpenAI (nur bei OCR_ENGINE=openai). Key NICHT ins Repo – kommt aus .env/Umgebung.
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # vision-fähig; gpt-4o für max. Genauigkeit
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    OCR_LANG = os.getenv("OCR_LANG", "eng")          # Tesseract-Sprachcode
+    # EasyOCR-Modelle: Ablageordner (im gemounteten models/ -> persistent, 1. Start lädt ~100 MB).
+    EASYOCR_DIR = os.getenv("EASYOCR_DIR", "models/easyocr")
+    # Erkannte Textboxen unter dieser Konfidenz verwerfen.
+    OCR_MIN_CONF = float(os.getenv("OCR_MIN_CONF", "0.3"))
+    # Label im Bild automatisch finden, entzerren, zuschneiden, hochskalieren -> bessere OCR.
+    LABEL_CROP = _as_bool(os.getenv("LABEL_CROP"), default=True)
 
     # --- Inventar / Digital Product Passport ---
     # Persistenter Speicher für Datensätze + Bilder (als Volume mounten, siehe podman-up.sh).
@@ -73,7 +86,8 @@ class Config:
     # Kurze Pause [s] zwischen den Schritten, damit man die Aktion im Overlay lesen kann.
     STEP_PAUSE_S = float(os.getenv("STEP_PAUSE_S", "1.2"))
     # OCR über mehrere Frames im Zeitfenster versuchen und das beste Ergebnis nehmen.
-    OCR_ATTEMPTS = int(os.getenv("OCR_ATTEMPTS", "4"))
+    # (EasyOCR ist pro Frame treffsicherer als Tesseract -> weniger Versuche nötig.)
+    OCR_ATTEMPTS = int(os.getenv("OCR_ATTEMPTS", "2"))
     # Datei mit eingeteachten Roboter-Posen (für den echten UR3e). Im gemounteten data/-Ordner,
     # damit geteachte Posen einen Neustart überleben. Fehlt sie -> Platzhalter aus dem Code.
     POSES_FILE = os.getenv("POSES_FILE", "data/poses.json")

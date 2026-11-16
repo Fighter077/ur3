@@ -76,8 +76,10 @@ Kamera, sicherer Erstlauf).
 
 - **Geste** (MediaPipe HandLandmarker): rein als **Trigger**; der Roboter wird manuell/standalone
   gestartet (keine direkte Roboter-Software-Kopplung, wie im Poster).
-- **OCR** (`ocr.py`, Tesseract): liest Hersteller/Modell/Kapazität. Heuristische Feldextraktion
-  (Herstellerliste + Regex); unsichere Fälle → `review`. Austauschbar (z. B. EasyOCR/Vision-Modell).
+- **OCR** (`ocr.py`): liest Hersteller/Modell/Kapazität. Default **EasyOCR** (neuronales OCR, robust
+  bei Foto-Text; Tesseract als Fallback via `OCR_ENGINE=tesseract`). Davor **Label-ROI-Vorverarbeitung**
+  (`LABEL_CROP`): das Label wird im Bild gesucht, entzerrt, zugeschnitten und hochskaliert → bessere
+  effektive Auflösung. Heuristische Feldextraktion (Herstellerliste + Regex); unsichere Fälle → `review`.
 - **Inspektionsposen** in `robot/inspection.py` sind **Platzhalter fürs Konzept/den Mock** und
   werden am realen Aufbau eingeteacht.
 

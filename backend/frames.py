@@ -12,7 +12,8 @@ from typing import Optional
 import numpy as np
 
 _lock = threading.Lock()
-_latest: Optional[np.ndarray] = None
+_latest: Optional[np.ndarray] = None       # aus dem WebRTC-Stream (komprimiert, niedrig aufgelöst)
+_hires: Optional[np.ndarray] = None        # Full-Res-Standbild vom Client (unkomprimiert, scharf)
 
 
 def set_frame(frame_bgr: np.ndarray) -> None:
@@ -23,4 +24,23 @@ def set_frame(frame_bgr: np.ndarray) -> None:
 
 def get_frame() -> Optional[np.ndarray]:
     with _lock:
+        return None if _latest is None else _latest.copy()
+
+
+def set_hires(frame_bgr: np.ndarray) -> None:
+    global _hires
+    with _lock:
+        _hires = frame_bgr
+
+
+def get_hires() -> Optional[np.ndarray]:
+    with _lock:
+        return None if _hires is None else _hires.copy()
+
+
+def best_for_ocr() -> Optional[np.ndarray]:
+    """Bevorzugt das scharfe Full-Res-Standbild; sonst das WebRTC-Frame."""
+    with _lock:
+        if _hires is not None:
+            return _hires.copy()
         return None if _latest is None else _latest.copy()

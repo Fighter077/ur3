@@ -14,6 +14,8 @@ export class RobotService {
   private pc: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private clientId = crypto.randomUUID();
+  private stillTimer: any = null;
+  private stillCanvas = document.createElement('canvas');
 
   connectionState$ = new BehaviorSubject<string>('getrennt');
   robotState$ = new BehaviorSubject<RobotState | null>(null);
@@ -34,6 +36,7 @@ export class RobotService {
   }
 
   disconnect(videoEl?: HTMLVideoElement) {
+    this.stopStillCapture();
     this.pc?.close();
     this.pc = null;
     this.localStream?.getTracks().forEach((t) => t.stop());
@@ -80,21 +83,23 @@ export class RobotService {
     this.pc.onconnectionstatechange = () =>
       this.connectionState$.next(this.pc?.connectionState || 'getrennt');
 
+    // Hohe Auflösung + Bitrate: der Text auf Bauteil-Labels ist klein -> für OCR zählt Schärfe,
+    // nicht Framerate. Niedrige FPS lassen die Bitrate in Bildqualität fliessen.
     this.localStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 20 } },
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 15 } },
     });
     videoEl.srcObject = this.localStream;
     videoEl.play().catch(() => {});
 
     this.localStream.getTracks().forEach((t) => this.pc!.addTrack(t, this.localStream!));
 
-    // Bandbreite begrenzen (wie in der Referenz)
     const sender = this.pc.getSenders().find((s) => s.track?.kind === 'video');
     if (sender) {
       const p = sender.getParameters();
       if (!p.encodings) p.encodings = [{}];
-      p.encodings[0].maxBitrate = 800_000;
-      p.encodings[0].maxFramerate = 20;
+      p.encodings[0].maxBitrate = 6_000_000;       // ~6 Mbit/s -> volle Auflösung, scharfer Text
+      p.encodings[0].maxFramerate = 15;
+      p.encodings[0].scaleResolutionDownBy = 1;     // nicht runterskalieren
       await sender.setParameters(p);
     }
 
@@ -111,6 +116,41 @@ export class RobotService {
     });
     const answer = await resp.json();
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+    // Full-Res-Standbilder regelmässig ans Backend posten (scharf, unkomprimiert -> OCR).
+    this.startStillCapture(videoEl);
+  }
+
+  /** Alle 600 ms ein Vollbild aus dem lokalen Video greifen und ans Backend posten. */
+  private startStillCapture(video: HTMLVideoElement) {
+    this.stopStillCapture();
+    this.stillTimer = setInterval(() => {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h) return;
+      this.stillCanvas.width = w;
+      this.stillCanvas.height = h;
+      const ctx = this.stillCanvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, w, h);
+      this.stillCanvas.toBlob(
+        (blob) => {
+          if (!blob) return;
+          fetch(`${BACKEND.http}/snapshot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'image/jpeg' },
+            body: blob,
+          }).catch(() => {});
+        },
+        'image/jpeg',
+        0.92,
+      );
+    }, 600);
+  }
+  private stopStillCapture() {
+    if (this.stillTimer) {
+      clearInterval(this.stillTimer);
+      this.stillTimer = null;
+    }
   }
 
   // ---------------- Steuerbefehle ----------------

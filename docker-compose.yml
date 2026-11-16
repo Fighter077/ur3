@@ -22,6 +22,10 @@ services:
       - ROBOT_IP=${ROBOT_IP:-192.168.1.100}
       - YOLO_DEVICE=${YOLO_DEVICE:-cpu}
       - GRIPPER_TYPE=${GRIPPER_TYPE:-none}
+      # OCR-Engine + OpenAI (Key kommt aus der gitignorten .env, nie aus dem Repo)
+      - OCR_ENGINE=${OCR_ENGINE:-easyocr}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - PYTHONUNBUFFERED=1
     volumes:
       - ./backend/models:/app/models:z   # Modelle (YOLO/Hand) – persistent, nicht im Image
