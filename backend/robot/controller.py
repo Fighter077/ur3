@@ -10,6 +10,7 @@ Alle Gelenkwinkel sind 6er-Listen in Radiant (base..wrist3).
 """
 from __future__ import annotations
 
+import concurrent.futures
 import math
 import threading
 import time
@@ -65,6 +66,10 @@ class RobotController(ABC):
     # ---- Greifer (Platzhalter bis Endeffektor feststeht) ----
     @abstractmethod
     def set_gripper(self, closed: bool) -> None: ...
+
+    def is_busy(self) -> bool:
+        """True solange eine (asynchrone) Bewegung noch läuft. Mock: immer sofort fertig."""
+        return False
 
     def close(self) -> None:  # optional override
         pass
@@ -167,6 +172,12 @@ class RTDEController(RobotController):
 
         self._ip = ip
         self._lock = threading.Lock()
+        # ALLE Control-Interface-Aufrufe laufen über EINEN dedizierten Thread. ur_rtde ist nicht
+        # thread-sicher; selbst sequenzielle Aufrufe aus wechselnden Threadpool-Threads lösen
+        # "Another thread is controlling the robot" aus. Ein einziger Thread = keine Parallelität
+        # und kein Thread-Wechsel.
+        self._ctrl_exec = concurrent.futures.ThreadPoolExecutor(max_workers=1,
+                                                                thread_name_prefix="ur-ctrl")
         try:
             self._rtde_c = rtde_control.RTDEControlInterface(ip)
             self._rtde_r = rtde_receive.RTDEReceiveInterface(ip)
@@ -174,61 +185,71 @@ class RTDEController(RobotController):
             raise RobotError(f"Verbindung zum UR3e {ip} fehlgeschlagen: {e}") from e
         self._gripper_closed = False
 
+    def _ctrl(self, fn):
+        """Führt eine Control-Operation auf dem dedizierten Thread aus und wartet auf das Ergebnis."""
+        return self._ctrl_exec.submit(fn).result()
+
     def is_connected(self) -> bool:
         try:
-            return self._rtde_r.isConnected() and self._rtde_c.isConnected()
+            # NUR das Receive-Interface abfragen. Das Control-Interface (_rtde_c) ist nicht
+            # thread-sicher -> es darf NUR aus Steuerbefehlen (unter self._lock) angefasst werden,
+            # niemals aus dem Telemetrie-Thread (sonst "Another thread is controlling the robot").
+            return self._rtde_r.isConnected()
         except Exception:
             return False
 
     def get_state(self) -> dict:
-        with self._lock:
-            r = self._rtde_r
-            force = r.getActualTCPForce()
-            fnorm = math.sqrt(sum(f * f for f in force[:3]))
-            return {
-                "connected": self.is_connected(),
-                "mock": False,
-                "tcp_pose": [round(v, 4) for v in r.getActualTCPPose()],
-                "joints": [round(v, 4) for v in r.getActualQ()],
-                "tcp_force": [round(v, 3) for v in force],
-                "tcp_force_norm": round(fnorm, 3),
-                "gripper_closed": self._gripper_closed,
-                "moving": r.getRobotStatus() is not None and bool(r.getActualQd() and any(abs(v) > 1e-3 for v in r.getActualQd())),
-                "robot_mode": int(r.getRobotMode()),
-                "safety_mode": int(r.getSafetyMode()),
-            }
+        # Reines Lesen vom Receive-Interface -> kein Lock nötig und bleibt auch während einer
+        # Roboterbewegung live (das Control-Interface wird hier bewusst NICHT angefasst).
+        r = self._rtde_r
+        force = r.getActualTCPForce()
+        fnorm = math.sqrt(sum(f * f for f in force[:3]))
+        return {
+            "connected": r.isConnected(),
+            "mock": False,
+            "tcp_pose": [round(v, 4) for v in r.getActualTCPPose()],
+            "joints": [round(v, 4) for v in r.getActualQ()],
+            "tcp_force": [round(v, 3) for v in force],
+            "tcp_force_norm": round(fnorm, 3),
+            "gripper_closed": self._gripper_closed,
+            "moving": bool(r.getActualQd() and any(abs(v) > 1e-3 for v in r.getActualQd())),
+            "robot_mode": int(r.getRobotMode()),
+            "safety_mode": int(r.getSafetyMode()),
+        }
 
     def move_tcp(self, pose, speed=None, accel=None):
-        with self._lock:
-            self._rtde_c.moveL(list(pose),
-                               speed or config.ROBOT_TCP_SPEED,
-                               accel or config.ROBOT_TCP_ACCEL)
+        s, a = speed or config.ROBOT_TCP_SPEED, accel or config.ROBOT_TCP_ACCEL
+        # asynchronous=True -> Aufruf kehrt sofort zurück; der Zyklus wartet via is_busy().
+        # Dadurch kann stop() (ESC/Not-Halt) eine laufende Fahrt SOFORT unterbrechen.
+        self._ctrl(lambda: self._rtde_c.moveL(list(pose), s, a, True))
 
     def move_joints(self, q, speed=None, accel=None):
-        with self._lock:
-            self._rtde_c.moveJ(list(q),
-                               speed or config.ROBOT_JOINT_SPEED,
-                               accel or config.ROBOT_JOINT_ACCEL)
+        s, a = speed or config.ROBOT_JOINT_SPEED, accel or config.ROBOT_JOINT_ACCEL
+        self._ctrl(lambda: self._rtde_c.moveJ(list(q), s, a, True))
 
     def jog_tcp(self, dx=0.0, dy=0.0, dz=0.0, drx=0.0, dry=0.0, drz=0.0, speed=None):
-        with self._lock:
-            v = [dx, dy, dz, drx, dry, drz]
-            # speedL: Tool-Geschwindigkeitsvektor, Beschleunigung
-            self._rtde_c.speedL(v, config.ROBOT_TCP_ACCEL)
+        v = [dx, dy, dz, drx, dry, drz]
+        self._ctrl(lambda: self._rtde_c.speedL(v, config.ROBOT_TCP_ACCEL))
 
     def stop(self):
-        with self._lock:
+        def _s():
             self._rtde_c.speedStop()
             self._rtde_c.stopL(2.0)
+        self._ctrl(_s)
+
+    def is_busy(self) -> bool:
+        try:
+            return self._ctrl(lambda: self._rtde_c.getAsyncOperationProgress()) >= 0
+        except Exception:
+            return False
 
     def approach_until_contact(self, direction, max_distance, force_threshold=None):
         thr = force_threshold or config.ROBOT_FORCE_THRESHOLD
         n = math.sqrt(sum(d * d for d in direction)) or 1.0
         unit = [d / n for d in direction]
         start = self._rtde_r.getActualTCPPose()
-        with self._lock:
-            self._rtde_c.speedL([unit[0] * 0.02, unit[1] * 0.02, unit[2] * 0.02, 0, 0, 0],
-                                config.ROBOT_TCP_ACCEL)
+        self._ctrl(lambda: self._rtde_c.speedL(
+            [unit[0] * 0.02, unit[1] * 0.02, unit[2] * 0.02, 0, 0, 0], config.ROBOT_TCP_ACCEL))
         contact = False
         traveled = 0.0
         while traveled < max_distance:
@@ -254,8 +275,7 @@ class RTDEController(RobotController):
         try:
             if gtype == "digital":
                 level = closed if config.GRIPPER_DO_CLOSED else (not closed)
-                with self._lock:
-                    self._rtde_c.setStandardDigitalOut(config.GRIPPER_DO_PIN, bool(level))
+                self._ctrl(lambda: self._rtde_c.setStandardDigitalOut(config.GRIPPER_DO_PIN, bool(level)))
             elif gtype == "robotiq":
                 self._robotiq(closed)
         except Exception as e:  # Greiferfehler darf den Ablauf nicht hart abbrechen
@@ -275,10 +295,17 @@ class RTDEController(RobotController):
                 s.recv(64)
 
     def close(self):
+        # Control-Aufrufe über den dedizierten Thread, dann Receive trennen und Thread beenden.
         try:
-            self._rtde_c.stopScript()
-            self._rtde_c.disconnect()
+            self._ctrl(lambda: (self._rtde_c.stopScript(), self._rtde_c.disconnect()))
+        except Exception:
+            pass
+        try:
             self._rtde_r.disconnect()
+        except Exception:
+            pass
+        try:
+            self._ctrl_exec.shutdown(wait=False)
         except Exception:
             pass
 

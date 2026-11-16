@@ -82,6 +82,9 @@ def _handle_command(cmd: dict) -> dict:
         elif action == "start_inspection":
             res = get_cell().start(cmd.get("part_type"), source="manual")
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
+        elif action == "abort_inspection":
+            res = get_cell().abort()
+            return {"type": "ack", "action": action, "ok": True, "result": res}
         elif action == "teach_pose":
             res = get_cell().teach_pose(cmd.get("name", ""))
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}

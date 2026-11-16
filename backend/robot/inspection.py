@@ -44,11 +44,16 @@ DEFAULT_POSES = {
 POSE_NAMES = list(DEFAULT_POSES.keys())
 
 
+class _Aborted(Exception):
+    """Interner Abbruch der laufenden Sequenz (z. B. per ESC)."""
+
+
 class InspectionCell:
     def __init__(self):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = threading.Lock()
         self._running = False
+        self._abort = False
         self._state = {"state": "idle", "step": "", "part_type": None,
                        "progress": 0.0, "record_id": None, "error": None}
         self.poses = self._load_poses()
@@ -108,8 +113,27 @@ class InspectionCell:
             if self._loop is None:
                 return {"ok": False, "error": "cell not bound to event loop"}
             self._running = True
+            self._abort = False
         asyncio.run_coroutine_threadsafe(self._run_cycle(part_type, source), self._loop)
         return {"ok": True, "part_type": part_type, "source": source}
+
+    def abort(self) -> dict:
+        """Laufende Sequenz abbrechen: Roboter SOFORT anhalten + Zyklus beenden (ESC)."""
+        with self._lock:
+            was_running = self._running
+            self._abort = True
+        try:
+            get_controller().stop()  # unterbricht ein laufendes moveL/jog (thread-sicher)
+        except Exception as e:
+            print(f"[inspection] Stop beim Abbruch fehlgeschlagen: {e}")
+        sim.set_state(mode="ready", x=sim.READY[0], y=sim.READY[1], holding=False,
+                      opening=1.0, action="abgebrochen")
+        print("[inspection] Abbruch angefordert (ESC).")
+        return {"ok": True, "was_running": was_running}
+
+    def _ck(self) -> None:
+        if self._abort:
+            raise _Aborted()
 
     # ---- Capture + OCR über mehrere Frames im Zeitfenster ----
     async def _capture_side(self, loop, reader) -> tuple:
@@ -117,6 +141,8 @@ class InspectionCell:
         # OpenAI ist pro Bild zuverlässig -> 1 Call/Seite (spart API-Kosten); lokale Engines mehrfach.
         n = 1 if config.OCR_ENGINE == "openai" else max(1, config.OCR_ATTEMPTS)
         for _ in range(n):
+            if self._abort:
+                break
             await asyncio.sleep(config.INSPECT_SETTLE_S / n)
             fr = frames.best_for_ocr()   # scharfes Hi-Res-Standbild bevorzugt
             res = await loop.run_in_executor(None, reader.read, fr)
@@ -134,8 +160,15 @@ class InspectionCell:
         reader = await loop.run_in_executor(None, get_reader)
         inv = get_inventory()
 
-        def move(name):
-            robot.move_tcp(self.poses[name])
+        async def move_to(name):
+            # Asynchrone Fahrt starten und auf Zielerreichung ODER Abbruch warten -> ESC/Not-Halt
+            # kann die Bewegung sofort unterbrechen (stop() läuft dann zwischen den is_busy-Abfragen).
+            await loop.run_in_executor(None, lambda: robot.move_tcp(self.poses[name]))
+            while not self._abort:
+                if not await loop.run_in_executor(None, robot.is_busy):
+                    break
+                await asyncio.sleep(0.05)
+            self._ck()
 
         try:
             await self._set("PICK", "pick", part_type, 0.05)
@@ -145,25 +178,28 @@ class InspectionCell:
             else:
                 sim.set_state(mode="inspect", x=0.75, y=0.62, holding=False, opening=1.0,
                               action="greift Teil aus Halter")
-                await loop.run_in_executor(None, move, "holder")
+                await move_to("holder")
                 await loop.run_in_executor(None, robot.set_gripper, True)
                 sim.set_state(holding=True, opening=0.0)
                 await asyncio.sleep(config.STEP_PAUSE_S)
-                await loop.run_in_executor(None, move, "holder_up")
+                await move_to("holder_up")
 
+            self._ck()
             # --- Inspektion: Vorderseite ---
             await self._set("INSPECT", "front", part_type, 0.30)
             sim.set_state(mode="inspect", x=0.5, y=0.38, holding=True, opening=0.0,
                           action="Vorderseite vor Kamera – Label zeigen")
-            await loop.run_in_executor(None, move, "front")
+            await move_to("front")
             res_front, front = await self._capture_side(loop, reader)
 
+            self._ck()
             # --- Inspektion: Rückseite ---
             await self._set("INSPECT", "back", part_type, 0.55)
             sim.set_state(action="Rückseite (180° gedreht) – Label zeigen")
-            await loop.run_in_executor(None, move, "back")
+            await move_to("back")
             res_back, back = await self._capture_side(loop, reader)
 
+            self._ck()
             # --- OCR-Ergebnis / Datensatz ---
             await self._set("READ", "ocr", part_type, 0.75)
             sim.set_state(action="wertet Label aus (OCR)…")
@@ -188,6 +224,7 @@ class InspectionCell:
             with self._lock:
                 self._state["record_id"] = rec["id"]
 
+            self._ck()
             # --- Sortieren / Ablage ---
             identified = best.get("status") == "identified"
             await self._set("SORT", "collection" if identified else "review",
@@ -195,14 +232,20 @@ class InspectionCell:
             sim.set_state(mode="inspect", x=0.2 if identified else 0.8, y=0.72, holding=True,
                           action="sortiert ab" if identified else "Review-Ablage")
             await asyncio.sleep(config.STEP_PAUSE_S)
-            await loop.run_in_executor(None, move, "collection")
+            await move_to("collection")
             await loop.run_in_executor(None, robot.set_gripper, False)
             sim.set_state(holding=False, opening=1.0, action="abgelegt")
             await asyncio.sleep(config.STEP_PAUSE_S)
-            await loop.run_in_executor(None, move, "home")
+            await move_to("home")
 
             await self._set("DONE", "done", part_type, 1.0, record_id=rec["id"])
             await asyncio.sleep(config.STEP_PAUSE_S)
+        except _Aborted:
+            await self._set("ABORTED", "aborted", part_type, 0.0)
+            try:
+                await loop.run_in_executor(None, robot.stop)
+            except Exception:
+                pass
         except Exception as e:
             await self._set("ERROR", "error", part_type, 0.0, error=str(e))
             try:
@@ -212,6 +255,7 @@ class InspectionCell:
         finally:
             with self._lock:
                 self._running = False
+                self._abort = False
             sim.set_state(mode="ready", x=sim.READY[0], y=sim.READY[1], holding=False,
                           opening=1.0, action="bereit")
             await self._set("idle", "", None, 0.0)

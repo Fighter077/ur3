@@ -69,6 +69,7 @@ export class AppComponent implements OnInit, OnDestroy {
   gx = 0.5; gy = 0.16; gOpen = 1;
   gHolding = false; gMode = 'ready'; gAction = 'bereit';
   handoverProgress = 0; handoverActive = false;
+  private flashSuppressed = false;   // ESC schaltet den Flash sofort aus (ohne Backend-Roundtrip)
   private raf = 0;
 
   constructor(
@@ -84,7 +85,10 @@ export class AppComponent implements OnInit, OnDestroy {
     });
     this.svc.robotState$.subscribe((r) => (this.robot = r));
     this.svc.analysis$.subscribe((a) => this.onAnalysis(a));
-    this.svc.inspection$.subscribe((i) => (this.inspection = i));
+    this.svc.inspection$.subscribe((i) => {
+      this.inspection = i;
+      if (i?.state === 'PICK') this.flashSuppressed = false; // neuer Zyklus -> Flash wieder erlauben
+    });
     this.svc.inventory$.subscribe((inv) => (this.inventory = inv));
     this.svc.ack$.subscribe((a) => this.onAck(a));
   }
@@ -104,6 +108,8 @@ export class AppComponent implements OnInit, OnDestroy {
         : this.t.instant('robot.failed', { error: r.error || '' });
       this.snack.open(msg, 'OK', { duration: r.ok ? 3000 : 4500 });
       this.robotUseReal = !r.mock; // Toggle an die Realität anpassen (Fallback auf Mock sichtbar)
+    } else if (a.action === 'abort_inspection') {
+      if (a.result?.was_running) this.snack.open(this.t.instant('ack.aborted'), 'OK', { duration: 2500 });
     } else if (a.action === 'start_inspection' && !a.ok) {
       this.snack.open(this.t.instant('ack.startFailed', { error: a.result?.error || '' }), 'OK', { duration: 2500 });
     } else if (a.ok === false && a.error) {
@@ -183,6 +189,11 @@ export class AppComponent implements OnInit, OnDestroy {
   // Leertaste startet den Zyklus, wenn der Spacebar-Modus aktiv ist.
   @HostListener('window:keydown', ['$event'])
   onKeydown(e: KeyboardEvent) {
+    if (e.code === 'Escape') {        // ESC bricht die laufende Sequenz sofort ab
+      this.flashSuppressed = true;    // Flash SOFORT aus (vor dem Backend-Roundtrip)
+      this.svc.abortInspection();
+      return;
+    }
     if (e.code !== 'Space' || this.controlMode !== 'spacebar') return;
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(tag)) return; // nicht in Eingaben/Buttons
@@ -221,7 +232,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   // Weißer Aufhell-"Blitz" genau während der Foto-Aufnahme (Inspektionsposen vor der Kamera).
   get flashOn(): boolean {
-    return this.inspection?.state === 'INSPECT';
+    return !this.flashSuppressed && this.inspection?.state === 'INSPECT';
   }
   startInspection() {
     this.svc.startInspection(this.partType);

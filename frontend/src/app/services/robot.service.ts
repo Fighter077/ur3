@@ -191,6 +191,9 @@ export class RobotService {
   startInspection(partType: string) {
     this.send({ action: 'start_inspection', part_type: partType });
   }
+  abortInspection() {
+    this.send({ action: 'abort_inspection' });
+  }
   listInventory() {
     this.send({ action: 'list_inventory' });
   }

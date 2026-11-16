@@ -87,6 +87,7 @@
     "teachSaved": "Pose \"{{name}}\" saved",
     "teachFailed": "Teach failed: {{error}}",
     "startFailed": "Cannot start: {{error}}",
+    "aborted": "Sequence aborted.",
     "error": "Error: {{error}}"
   }
 }
