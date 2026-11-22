@@ -13,6 +13,7 @@ from typing import Dict
 
 from aiohttp import web, WSMsgType
 
+from config import config
 from robot import get_controller, set_controller, RobotError
 from robot.inspection import get_cell
 from inventory import get_inventory
@@ -128,8 +129,9 @@ async def ws_handler(request: web.Request):
     _connections[client_id] = ws
     print(f"[ws] verbunden: {client_id}")
 
-    # Initialzustand an den neuen Client: aktuelles Inventar + Inspektionsstatus.
+    # Initialzustand an den neuen Client: Roboterkonfiguration, Inventar und Inspektionsstatus.
     try:
+        await ws.send_str(json.dumps({"type": "robot_config", "default_ip": config.ROBOT_IP}))
         await ws.send_str(json.dumps({"type": "inventory", "records": get_inventory().list_records()}))
         await ws.send_str(json.dumps({"type": "inspection", **get_cell().state()}))
     except Exception:

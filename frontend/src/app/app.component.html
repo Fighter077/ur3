@@ -74,7 +74,7 @@
           <div class="flex items-center gap-3 flex-wrap mt-3">
             <mat-form-field appearance="outline" subscriptSizing="dynamic" class="w-48" *ngIf="robotUseReal">
               <mat-label>{{ 'robot.ip' | translate }}</mat-label>
-              <input matInput [(ngModel)]="robotIp" placeholder="192.168.1.100" />
+              <input matInput [(ngModel)]="robotIp" (ngModelChange)="robotIpEdited = true" />
             </mat-form-field>
             <button mat-raised-button color="primary" (click)="applyRobot()">
               <mat-icon>bolt</mat-icon> {{ 'robot.apply' | translate }}

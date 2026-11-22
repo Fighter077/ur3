@@ -26,6 +26,7 @@ export class RobotService {
 
   connectionState$ = new BehaviorSubject<string>('disconnected');
   robotState$ = new BehaviorSubject<RobotState | null>(null);
+  robotDefaultIp$ = new BehaviorSubject<string | null>(null);
   analysis$ = new BehaviorSubject<Analysis | null>(null);
   inspection$ = new BehaviorSubject<InspectionState | null>(null);
   inventory$ = new BehaviorSubject<InventoryRecord[]>([]);
@@ -153,6 +154,9 @@ export class RobotService {
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         switch (msg.type) {
+          case 'robot_config':
+            this.robotDefaultIp$.next(msg.default_ip);
+            break;
           case 'robot_state':
             this.robotState$.next(msg.state as RobotState);
             break;
