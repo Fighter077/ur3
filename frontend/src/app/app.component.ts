@@ -57,7 +57,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   partType = 'auto';
   controlMode: 'gesture' | 'spacebar' = 'gesture';
   robotUseReal = false;              // false = Simulation (Mock), true = echter UR3e
-  robotIp = '192.168.1.100';
+  robotIp = '';
+  robotIpEdited = false;
   jogSpeed = 0.03;
   poseNames = ['home', 'holder', 'holder_up', 'front', 'back', 'back_clearance', 'collection'];
   private flashSuppressed = false;
@@ -89,6 +90,9 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       else this.startPending = false;
     });
     this.svc.robotState$.pipe(takeUntilDestroyed()).subscribe((r) => (this.robot = r));
+    this.svc.robotDefaultIp$.pipe(takeUntilDestroyed()).subscribe((ip) => {
+      if (ip !== null && !this.robotIpEdited) this.robotIp = ip;
+    });
     this.svc.analysis$.pipe(takeUntilDestroyed()).subscribe((a) => this.onAnalysis(a));
     this.svc.inspection$.pipe(takeUntilDestroyed()).subscribe((i) => {
       this.inspection = i;
