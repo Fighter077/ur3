@@ -8,6 +8,8 @@ backend/snapshots/
 # Modelle (groß / zur Laufzeit bezogen -> nicht ins Git): YOLO, MediaPipe,
 # EasyOCR (models/easyocr/*.pth), HuggingFace-Cache (models/hf/) usw.
 backend/models/
+backend/yolo11n.pt
+backend/yolo11n.pt.*.partial
 
 # Laufzeitdaten: Inventar (DPP), Label-Bilder, geteachte Posen
 backend/data/
