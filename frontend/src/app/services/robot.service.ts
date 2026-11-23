@@ -69,6 +69,17 @@ export class RobotService {
     return response.json();
   }
 
+  async calibrateHandover(payload: object) {
+    const response = await fetch(`${BACKEND.http}/handover-calibration`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: this.clientId, ...payload }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  }
+
   // ---------------- Verbindung ----------------
   async connect(videoEl: HTMLVideoElement) {
     this.videoEl = videoEl;
@@ -430,6 +441,9 @@ export class RobotService {
   }
   gripper(closed: boolean) {
     this.send({ action: 'gripper', closed });
+  }
+  getGripperStatus() {
+    this.send({ action: 'get_gripper_status' });
   }
   approachUntilContact(direction: number[], maxDistance: number, forceThreshold?: number) {
     this.send({

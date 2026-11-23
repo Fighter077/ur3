@@ -55,7 +55,7 @@ function setup({ secure = true } = {}) {
   const modules = {
     '@angular/core': {
       Injectable: noopDecorator, Component: noopDecorator,
-      HostListener: noopDecorator, ViewChild: noopDecorator,
+      HostListener: noopDecorator, ViewChild: noopDecorator, Input: noopDecorator,
     },
     '@angular/core/rxjs-interop': { takeUntilDestroyed: () => (value) => value },
     rxjs: require('rxjs'),
@@ -79,7 +79,7 @@ function setup({ secure = true } = {}) {
   const video = { srcObject: null, play: async () => {} };
   app.videoEl = { nativeElement: video };
   return {
-    service, app, video, sockets, peers, requests, timers, media,
+    service, app, video, sockets, peers, requests, timers, media, load,
     retry() {
       const entry = [...timers.entries()].find(([, t]) => t.delay === 1500);
       assert.ok(entry, 'A reconnect must be scheduled');
@@ -89,6 +89,33 @@ function setup({ secure = true } = {}) {
 }
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+
+test('calibration wizard sends measured dimensions and a robot-base reference pose', async () => {
+  const h = setup();
+  const { CalibrationWizardComponent } = h.load('src/app/calibration-wizard.component.ts');
+  const payloads = [];
+  const wizard = new CalibrationWizardComponent({
+    imageUrl: (url) => url,
+    async calibrateHandover(payload) {
+      payloads.push(JSON.parse(JSON.stringify(payload)));
+      return { minimum: 8, captures: payload.action === 'capture' ? 1 : 0 };
+    },
+  });
+  wizard.squareMm = 30;
+  await wizard.start();
+  assert.equal(wizard.sessionMatches, true);
+  await wizard.capture();
+  assert.equal(wizard.captures, 1);
+  wizard.currentTcp = [0.1, 0.2, 0.3, 0, 0, 1.57];
+  wizard.copyCurrentTcp();
+  await wizard.captureReference();
+  assert.equal(wizard.step, 'grasp');
+  assert.deepEqual(payloads, [
+    { action: 'start', square_size_m: 0.03 },
+    { action: 'capture' },
+    { action: 'reference', board_in_base_pose: [0.1, 0.2, 0.3, 0, 0, 1.57] },
+  ]);
+});
 
 test('QR button opens the dialog with the HTTPS address from the backend', async () => {
   const { app } = setup();

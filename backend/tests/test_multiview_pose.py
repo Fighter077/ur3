@@ -4,17 +4,46 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "perception"))
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
 VISION_AVAILABLE = find_spec("numpy") is not None and find_spec("cv2") is not None
 
 
 @unittest.skipUnless(VISION_AVAILABLE, "NumPy and OpenCV are required")
 class MultiviewPoseTests(unittest.TestCase):
+    def test_calibration_registers_the_camera_in_robot_base_coordinates(self):
+        import cv2
+        import numpy as np
+        from perception.calibration_wizard import _calibrate_view
+
+        points = np.array([[x * .03, y * .03, 0] for y in range(1, 5) for x in range(1, 7)], np.float32)
+        size = (1280, 720)
+        intrinsics = np.array([[810., 0., 640.], [0., 790., 360.], [0., 0., 1.]])
+        distortion = np.zeros(5)
+        ids = np.arange(len(points))
+        samples = []
+        for i in range(9):
+            rvec = np.array([.12 + .05 * i, .24 - .048 * i, (-1)**i * .12])
+            shift = np.array([-.13 + .02 * (i % 3), -.09 + .025 * (i // 3), .48 + .025 * i])
+            pixels, _ = cv2.projectPoints(points, rvec, shift, intrinsics, distortion)
+            samples.append((size, points, pixels, ids))
+        board_pose = np.array([.04, -.08, .58, .16, .08, -.15])
+        expected_rvec = np.array([-.09, .13, .05])
+        expected_offset = np.array([-.14, .01, .06])
+        board_to_base, _ = cv2.Rodrigues(board_pose[3:])
+        pixels, _ = cv2.projectPoints(
+            points @ board_to_base.T + board_pose[:3],
+            expected_rvec, expected_offset, intrinsics, distortion,
+        )
+        result, errors = _calibrate_view(samples, (size, points, pixels, ids), board_pose)
+        np.testing.assert_allclose(result["base_to_camera_rvec"], expected_rvec, atol=1e-3)
+        np.testing.assert_allclose(result["base_to_camera_translation_m"], expected_offset, atol=1e-3)
+        self.assertLess(errors["reference_rms_px"], 0.01)
+
     def test_recovers_pose_and_rejects_coincident_camera_centers(self):
         import cv2
         import numpy as np
-        from multiview_pose import estimate_pose
+        from perception.multiview_pose import estimate_pose
 
         points = np.array([[-.03, -.06, 0], [.03, -.06, 0], [.03, .06, 0], [-.03, .06, 0]])
         rvec = np.array([.12, -.2, .07])

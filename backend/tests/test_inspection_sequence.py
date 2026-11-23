@@ -57,6 +57,7 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
             frames=SimpleNamespace(best_for_ocr=lambda: "frame"),
             get_controller=lambda: self.robot, get_reader=lambda: self.reader,
             MockController=Mock,
+            same_grasp=lambda current, original: current == original,
             get_inventory=lambda: inv,
             detected_part_type=detected_part_type,
         )
@@ -92,9 +93,24 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.pending, "Flash must wait for motion completion")
             self.events.append(("flash", list(self.current)))
 
-    async def test_mock_handover_closes_gripper_and_skips_holder(self):
-        await self.cell._run_cycle("HDD", "handover")
-        self.assertEqual(self.events[:2], [("grip", True), ("move", self.cell.poses["front"], None)])
+    async def test_mock_handover_approaches_and_closes_at_estimated_pose(self):
+        approach = [0.4, 0.1, 0.4, 0.0, 0.0, 0.0]
+        grasp = [0.4, 0.1, 0.45, 0.0, 0.0, 0.0]
+        plan = (approach, grasp)
+        await self.cell._run_cycle("HDD", "handover", grasp_plan=plan, locate_grasp=lambda: plan)
+        self.assertEqual(self.events[:5], [
+            ("grip", False), ("move", approach, None), ("move", grasp, None),
+            ("grip", True), ("move", self.cell.poses["front"], None),
+        ])
+
+    async def test_mock_handover_never_closes_when_target_is_lost(self):
+        plan = ([0.4, 0.1, 0.4, 0.0, 0.0, 0.0], [0.4, 0.1, 0.45, 0.0, 0.0, 0.0])
+        await self.cell._run_cycle(
+            "HDD", "handover", grasp_plan=plan,
+            locate_grasp=lambda: None if self.pending is not None else plan,
+        )
+        self.assertNotIn(("grip", True), self.events)
+        self.robot.stop.assert_called_once()
 
     def test_physical_handover_is_rejected_before_start(self):
         self.ns["get_controller"] = lambda: object()

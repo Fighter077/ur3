@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import asyncio
 from base64 import b64encode
+import json
 import os
+from pathlib import Path
 import threading
+from time import monotonic
 
 import aiohttp_cors
 from aiohttp import ClientError, ClientSession, ClientTimeout
@@ -19,8 +22,10 @@ from aiohttp import web
 import numpy as np
 
 from config import config
-from rtc import camera_is_selected, network_camera, network_camera_active, offer, on_shutdown
-from websocket_hub import ws_handler, start_telemetry, stop_telemetry
+from camera_sources import remote_camera, sources
+from perception.calibration_wizard import MIN_CAPTURES, CalibrationWizard, board_image
+from rtc import camera_is_selected, network_camera, network_camera_active, offer, on_shutdown, set_handover_geometry
+from websocket_hub import get_ws, ws_handler, start_telemetry, stop_telemetry
 from robot import MockController, get_controller
 from robot.inspection import get_cell
 from inventory import get_inventory
@@ -44,6 +49,73 @@ async def interface_qr(request):
     if not ok:
         raise web.HTTPInternalServerError(text="Could not encode QR image.")
     return web.json_response({"url": url, "png": b64encode(png).decode("ascii")})
+
+
+async def handover_calibration_board(request):
+    return web.Response(
+        body=await asyncio.to_thread(board_image),
+        content_type="image/png",
+        headers={"Content-Disposition": 'attachment; filename="handover-charuco.png"'},
+    )
+
+
+async def handover_calibration(request):
+    import cv2
+
+    try:
+        data = await request.json()
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text="Expected a JSON calibration request.") from exc
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text="Expected a JSON calibration request.")
+    client_id = data.get("clientId")
+    ws = get_ws(client_id) if isinstance(client_id, str) else None
+    if ws is None or ws.closed:
+        raise web.HTTPBadRequest(text="Connect to the backend first.")
+    if ws.get("calibration_busy", False):
+        raise web.HTTPConflict(text="A calibration request is already running.")
+    ws["calibration_busy"] = True
+    try:
+        action = data.get("action")
+        if action == "start":
+            ws["calibration_wizard"] = CalibrationWizard(float(data["square_size_m"]))
+            return web.json_response({"minimum": MIN_CAPTURES, "captures": 0})
+        wizard = ws.get("calibration_wizard")
+        if wizard is None:
+            raise ValueError("Start the calibration wizard first.")
+        local, remote = sources.get(client_id), remote_camera(client_id)
+        if local is None or remote is None:
+            raise ValueError("Both cameras need to be streaming.")
+        source_ids = (local.id, remote.id)
+        if action in ("capture", "reference"):
+            timestamps = (local.updated_at, remote.updated_at)
+            camera_frames = (local.latest, remote.latest)
+            if any(frame is None for frame in camera_frames) or (
+                monotonic() - min(timestamps) > 0.7 or abs(timestamps[0] - timestamps[1]) > 0.2
+            ):
+                raise ValueError("Waiting for a fresh pair of frames. Hold the board still and try again.")
+            if action == "capture":
+                count = await asyncio.to_thread(wizard.capture, camera_frames, source_ids)
+                return web.json_response({"minimum": MIN_CAPTURES, "captures": count})
+            await asyncio.to_thread(wizard.capture_reference, camera_frames, source_ids, data["board_in_base_pose"])
+            return web.json_response({"reference": True})
+        if action == "save":
+            if get_cell().running:
+                raise ValueError("Finish the active cycle before saving new calibration.")
+            calibration, geometry, errors = await asyncio.to_thread(wizard.solve, source_ids, data["grasp"])
+            if get_cell().running or ws.closed or sources.get(client_id) is not local or remote_camera(client_id) is not remote:
+                raise ValueError("The active cycle or camera connection changed. Check the setup and retry.")
+            path = Path(config.DATA_DIR) / "handover_calibration.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(calibration, indent=2, allow_nan=False), encoding="utf-8")
+            tmp.replace(path)
+            set_handover_geometry(geometry)
+            return web.json_response({"saved": True, "errors": errors})
+        raise ValueError("Unknown calibration action.")
+    except (KeyError, ValueError, TypeError, cv2.error, np.linalg.LinAlgError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    finally:
+        ws["calibration_busy"] = False
 
 
 async def health(request):
@@ -155,6 +227,8 @@ def create_app() -> web.Application:
     cors.add(app.router.add_get("/ws", ws_handler))
     cors.add(app.router.add_get("/health", health))
     cors.add(app.router.add_get("/interface-qr", interface_qr))
+    cors.add(app.router.add_post("/handover-calibration", handover_calibration))
+    cors.add(app.router.add_get("/handover-calibration/board", handover_calibration_board))
     cors.add(app.router.add_post("/snapshot", snapshot))
     cors.add(app.router.add_get("/debug/ocr", debug_ocr))
 

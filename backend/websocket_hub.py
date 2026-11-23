@@ -72,7 +72,7 @@ async def notify_camera_sources():
 # --------------------------------------------------------------------------- #
 # Befehls-Dispatch
 # --------------------------------------------------------------------------- #
-def _handle_command(cmd: dict, handover_observation=None) -> dict:
+def _handle_command(cmd: dict, locate_grasp=None) -> dict:
     """Blockierender Robotercall -> in Executor ausgeführt. Gibt ein ack-dict zurück."""
     robot = get_controller()
     action = cmd.get("action")
@@ -95,6 +95,8 @@ def _handle_command(cmd: dict, handover_observation=None) -> dict:
             get_cell().abort()
         elif action == "gripper":
             robot.set_gripper(bool(cmd.get("closed", False)))
+        elif action == "get_gripper_status":
+            return {"type": "ack", "action": action, "ok": True, "result": robot.get_gripper_status()}
         elif action == "approach_until_contact":
             res = robot.approach_until_contact(
                 cmd.get("direction", [0, 0, -1]),
@@ -107,13 +109,14 @@ def _handle_command(cmd: dict, handover_observation=None) -> dict:
             source = cmd.get("source", "manual")
             if source not in ("manual", "spacebar", "gesture", "handover"):
                 raise RobotError("Unknown inspection trigger source")
-            if source == "handover" and (
-                sim.control_mode() != "handover"
-                or handover_observation is None
-                or not handover_observation.ready()
-            ):
-                raise RobotError("Hand and component must be visible in both cameras.")
-            res = get_cell().start(cmd.get("part_type"), source=source)
+            if source == "handover":
+                if sim.control_mode() != "handover" or locate_grasp is None:
+                    raise RobotError("A fresh, stable 3D grasp estimate is required.")
+                res = get_cell().start(
+                    cmd.get("part_type"), source=source, locate_grasp=locate_grasp,
+                )
+            else:
+                res = get_cell().start(cmd.get("part_type"), source=source)
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
         elif action == "abort_inspection":
             res = get_cell().abort()
@@ -174,6 +177,12 @@ async def ws_handler(request: web.Request):
     except Exception:
         pass
 
+    def locate_grasp():
+        observation = ws.get("handover_observation")
+        if ws.closed or _connections.get(client_id) is not ws or sim.control_mode() != "handover" or observation is None:
+            return None
+        return observation.grasp_candidate()
+
     loop = asyncio.get_running_loop()
     try:
         async for msg in ws:
@@ -195,7 +204,7 @@ async def ws_handler(request: web.Request):
                     })
                     continue
                 # Roboter-Call blockiert -> in Threadpool auslagern, Event-Loop frei halten
-                ack = await loop.run_in_executor(None, _handle_command, cmd, ws.get("handover_observation"))
+                ack = await loop.run_in_executor(None, _handle_command, cmd, locate_grasp)
                 await ws.send_str(json.dumps(ack))
                 if ack.get("action") == "set_control_mode" and ack.get("ok"):
                     mode = sim.control_mode()

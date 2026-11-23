@@ -23,6 +23,7 @@ from config import config
 from perception import Detector, HandDetector
 from perception.gesture_trigger import GestureTrigger
 from perception.handover import HandoverObservation
+from perception.handover_geometry import load_handover_geometry
 from camera_sources import CameraSource, remote_camera, sources
 from websocket_hub import get_ws, notify_camera_sources, send_to
 from robot.inspection import get_cell
@@ -39,6 +40,12 @@ _DETECTION_MAX_SIDE = 640
 _objects = Detector() if config.OBJECTS_ENABLED else None
 # Hände -> Trigger-Geste.
 _hands = HandDetector() if config.HANDS_ENABLED else None
+_handover_geometry = load_handover_geometry(config.DATA_DIR)
+
+
+def set_handover_geometry(geometry) -> None:
+    global _handover_geometry
+    _handover_geometry = geometry
 
 
 def _latest_put(queue: asyncio.Queue, frame) -> None:
@@ -136,7 +143,11 @@ def _perceive(frame):
     with _model_lock:
         hands = _hands.detect(img) if _hands is not None else []
         objects = _objects.detect(img, track=False) if _objects is not None else []
-    return hands, objects
+        geometry = _handover_geometry
+        marker = (geometry, geometry.detect(img, (frame.width, frame.height))) if (
+            geometry is not None and sim.control_mode() == "handover"
+        ) else None
+    return hands, objects, marker
 
 
 async def _detect_latest(source: CameraSource):
@@ -147,19 +158,22 @@ async def _detect_latest(source: CameraSource):
         if frame is None or (samples and (frame is samples[0] or time.monotonic() < source.next_detection_at)):
             return samples
         captured_at = source.updated_at
-        hands, objects = await asyncio.get_running_loop().run_in_executor(None, _perceive, frame)
-        source.detection = (frame, captured_at, hands, objects)
+        hands, objects, marker = await asyncio.get_running_loop().run_in_executor(None, _perceive, frame)
+        source.detection = (frame, captured_at, hands, objects, marker)
         source.next_detection_at = time.monotonic() + _DETECTION_INTERVAL_S
         return source.detection
 
 
-async def _observe_handover(client_id: str, network: bool, hands: list, objects: list, captured_at: float):
+async def _observe_handover(client_id: str, network: bool, hands: list, objects: list, captured_at: float, marker):
     ws = get_ws(client_id)
     if ws is None or ws.closed:
         return
-    if ws.get("handover_observation") is None:
-        ws["handover_observation"] = HandoverObservation()
-    observation = ws["handover_observation"].update(network, hands, objects, captured_at=captured_at)
+    geometry = _handover_geometry
+    if ws.get("handover_observation") is None or ws.get("handover_geometry") is not geometry:
+        ws["handover_geometry"] = geometry
+        ws["handover_observation"] = HandoverObservation(geometry)
+    current_marker = marker[1] if marker is not None and marker[0] is geometry else None
+    observation = ws["handover_observation"].update(network, objects, captured_at=captured_at, marker=current_marker)
     await send_to(client_id, {
         "type": "handover_observation", "network_camera": network, "hands": hands, **observation,
     })
@@ -179,7 +193,7 @@ async def _process_frames(client_id: str, latest: asyncio.Queue, source: CameraS
             if frame is None:
                 break
             selected = camera_is_selected(client_id, network_camera)
-            observe = _objects is not None and sim.control_mode() == "handover"
+            observe = sim.control_mode() == "handover"
             if not selected and not observe:
                 trigger = GestureTrigger()
                 continue
@@ -197,9 +211,9 @@ async def _process_frames(client_id: str, latest: asyncio.Queue, source: CameraS
                 detect = detection is not None and detection is not last_detection
                 if detect:
                     last_detection = detection
-                    _, captured_at, last_hands, last_objects = detection
+                    _, captured_at, last_hands, last_objects, marker = detection
                     if observe and sim.control_mode() == "handover":
-                        await _observe_handover(client_id, network_camera, last_hands, last_objects, captured_at)
+                        await _observe_handover(client_id, network_camera, last_hands, last_objects, captured_at, marker)
             if not camera_is_selected(client_id, network_camera):
                 trigger = GestureTrigger()
                 continue
@@ -305,7 +319,7 @@ async def _observe_remote(client_id, ws, pc, source):
             frame = await asyncio.wait_for(source.next_frame(frame), timeout=10)
             if frame is None or pc.connectionState != "connected":
                 break
-            if _network_camera_ws is ws or (_objects is not None and sim.control_mode() == "handover"):
+            if _network_camera_ws is ws or sim.control_mode() == "handover":
                 _latest_put(latest, frame)
     except TimeoutError:
         pass

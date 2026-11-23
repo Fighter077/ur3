@@ -16,6 +16,15 @@
   a { overflow-wrap: anywhere; text-decoration: underline; }
   form, p { margin-top: 0.75rem; }
 }
+.calibration-dialog {
+  width: min(42rem, calc(100% - 2rem));
+  max-width: none;
+  max-height: calc(100% - 2rem);
+  overflow: auto;
+  text-align: left;
+
+  form { text-align: right; }
+}
 .flash {
   position: fixed; inset: 0; background: #fff; opacity: 0;
   pointer-events: none; z-index: 9999; transition: opacity 0.1s ease;

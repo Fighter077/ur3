@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import math
+import socket
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -74,6 +75,9 @@ class RobotController(ABC):
     # ---- Greifer (Platzhalter bis Endeffektor feststeht) ----
     @abstractmethod
     def set_gripper(self, closed: bool) -> None: ...
+
+    def get_gripper_status(self) -> dict:
+        raise RobotError("Gripper feedback is not available for this controller.")
 
     def is_busy(self) -> bool:
         """True solange eine (asynchrone) Bewegung noch läuft. Mock: immer sofort fertig."""
@@ -331,7 +335,6 @@ class RTDEController(RobotController):
     def _robotiq(self, closed: bool):
         """Robotiq-2F über das URCap-Socket (Port 63352). Setzt Zielposition (0=offen, 255=zu).
         Voraussetzung: Robotiq-URCap auf dem UR installiert/aktiviert."""
-        import socket
         pos = 255 if closed else 0
         cmds = [b"SET ACT 1\n", b"SET GTO 1\n", b"SET SPE 255\n", b"SET FOR 150\n",
                 f"SET POS {pos}\n".encode()]
@@ -339,6 +342,36 @@ class RTDEController(RobotController):
             for c in cmds:
                 s.sendall(c)
                 s.recv(64)
+
+    def get_gripper_status(self) -> dict:
+        if config.GRIPPER_TYPE != "robotiq":
+            return super().get_gripper_status()
+
+        values = {}
+        try:
+            with socket.create_connection((self._ip, 63352), timeout=0.5) as connection:
+                with connection.makefile("rb") as replies:
+                    for name in ("STA", "GTO", "FLT", "POS", "OBJ"):
+                        connection.sendall(f"GET {name}\n".encode("ascii"))
+                        raw = replies.readline(64)
+                        fields = raw.split()
+                        if not raw.endswith(b"\n") or len(fields) != 2 or fields[0] != name.encode("ascii"):
+                            raise ValueError(f"invalid {name} reply")
+                        value = int(fields[1])
+                        if not 0 <= value <= 255 or (name in ("STA", "OBJ") and value > 3) or (name == "GTO" and value > 1):
+                            raise ValueError(f"invalid {name} value")
+                        values[name] = value
+        except (OSError, ValueError) as exc:
+            raise RobotError(f"Hand-E status unavailable: {exc}") from exc
+
+        active = values["STA"] == 3 and values["GTO"] == 1 and values["FLT"] == 0
+        return {
+            "active": active,
+            "position": values["POS"],
+            "fault": values["FLT"],
+            "object_status": values["OBJ"],
+            "contact_on_close": active and values["OBJ"] == 2,
+        }
 
     def close(self):
         # Control-Aufrufe über den dedizierten Thread, dann Receive trennen und Thread beenden.

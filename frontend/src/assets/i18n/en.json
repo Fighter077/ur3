@@ -36,8 +36,10 @@
   },
   "handover": {
     "mode": "Handover",
-    "waiting": "Show the hand and component together in both cameras.",
-    "ready": "Hand and component detected in both cameras.",
+    "waiting": "Hold the tagged component steady and visible to both calibrated cameras.",
+    "calibrationMissing": "Load the two-camera calibration to estimate a 3D grasp.",
+    "ready": "Stable 3D grasp estimated.",
+    "baseTcp": "Grasp position in robot-base coordinates",
     "startMock": "Simulate handover",
     "mockOnly": "Physical handover requires a calibrated pose and gripper feedback."
   },
@@ -81,6 +83,10 @@
     "teachTooltip": "Save current TCP pose as '{{name}}'"
   },
   "telemetry": {
+    "handEStatus": "Read Hand-E status",
+    "handEInactive": "Hand-E feedback inactive. Fault {{fault}}, position {{position}}.",
+    "handEContact": "Hand-E detected contact while closing. Position {{position}}.",
+    "handENoContact": "Hand-E has no closing-contact signal. Object status {{object_status}}, position {{position}}.",
     "title": "Telemetry",
     "tcpPose": "TCP pose [m, rad]",
     "joints": "Joints [rad]",

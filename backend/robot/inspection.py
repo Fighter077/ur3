@@ -30,6 +30,7 @@ from config import config
 from inventory import get_inventory
 from part_types import detected_part_type
 from perception import get_reader
+from perception.handover import same_grasp
 from robot import MockController, get_controller
 
 PI = math.pi
@@ -121,12 +122,17 @@ class InspectionCell:
         with self._lock:
             return self._running
 
-    def start(self, part_type: Optional[str] = None, source: str = "manual") -> dict:
+    def start(self, part_type: Optional[str] = None, source: str = "manual", *, locate_grasp=None) -> dict:
         part_type = part_type or "auto"
         if part_type != "auto" and part_type not in config.PART_TYPES:
             return {"ok": False, "error": f"Unknown part type: {part_type}"}
         if source == "handover" and not isinstance(get_controller(), MockController):
             return {"ok": False, "error": "Camera-guided handover is available in simulation only."}
+        grasp_plan = None
+        if source == "handover":
+            grasp_plan = locate_grasp() if locate_grasp is not None else None
+            if grasp_plan is None:
+                return {"ok": False, "error": "A fresh, stable 3D grasp estimate is required."}
         with self._lock:
             if self._running:
                 return {"ok": False, "error": "inspection already running"}
@@ -134,7 +140,9 @@ class InspectionCell:
                 return {"ok": False, "error": "cell not bound to event loop"}
             self._running = True
             self._abort = False
-        asyncio.run_coroutine_threadsafe(self._run_cycle(part_type, source), self._loop)
+        asyncio.run_coroutine_threadsafe(
+            self._run_cycle(part_type, source, grasp_plan=grasp_plan, locate_grasp=locate_grasp), self._loop,
+        )
         return {"ok": True, "part_type": part_type, "source": source}
 
     def abort(self) -> dict:
@@ -188,7 +196,7 @@ class InspectionCell:
         return (best or reader.read(None)), best_frame
 
     # ---- Zyklus ----
-    async def _run_cycle(self, part_type: str, source: str):
+    async def _run_cycle(self, part_type: str, source: str, *, grasp_plan=None, locate_grasp=None):
         loop = asyncio.get_running_loop()
         robot = get_controller()
         # Reader-Konstruktion (EasyOCR/Torch) kann mehrere Sekunden dauern -> im Executor,
@@ -196,14 +204,17 @@ class InspectionCell:
         reader = await loop.run_in_executor(None, get_reader)
         inv = get_inventory()
 
-        async def move_to(name, speed=None):
+        async def move_to(name, speed=None, *, target=None, guard=None):
             # Asynchrone Fahrt starten und auf Zielerreichung ODER Abbruch warten -> ESC/Not-Halt
             # kann die Bewegung sofort unterbrechen (stop() läuft zwischen den Abfragen).
             # Zielpose, Stillstand UND Ende des robotseitigen Async-Threads abwarten.
-            target = self.poses.get(name)
+            if target is None:
+                target = self.poses.get(name)
             if target is None:
                 raise ValueError(f"Missing taught pose: {name}")
             self._ck()
+            if guard is not None:
+                guard()
             before = await loop.run_in_executor(None, robot.get_state)
             print(f"[inspection][motion] MoveL {name}: "
                   f"from={before.get('tcp_pose')} target={target} "
@@ -213,6 +224,8 @@ class InspectionCell:
             stable_since = None
             stable_for = max(0.1, config.INSPECT_STILL_S) if name in ("front", "back") else 0.1
             while not self._abort:
+                if guard is not None:
+                    guard()
                 st = await loop.run_in_executor(None, robot.get_state)
                 # Fahrt gilt erst als beendet, wenn die VOLLE Ziel-Pose erreicht ist UND die Gelenke
                 # stehen -> die nächste Bewegung startet garantiert nicht in eine laufende hinein.
@@ -240,7 +253,23 @@ class InspectionCell:
             if source == "handover":
                 if not isinstance(robot, MockController):
                     raise ValueError("Camera-guided handover is available in simulation only.")
+                if grasp_plan is None or locate_grasp is None:
+                    raise ValueError("Missing 3D grasp estimate.")
+                approach, grasp = grasp_plan
+
+                def confirm_grasp():
+                    current = locate_grasp()
+                    if current is None or not same_grasp(current[1], grasp):
+                        raise ValueError("Grasp target moved or the 3D estimate was lost.")
+
                 self._ck()
+                confirm_grasp()
+                await loop.run_in_executor(None, robot.set_gripper, False)
+                await self._set("PICK", "handover_approach", part_type, 0.08)
+                await move_to("handover_approach", target=approach, guard=confirm_grasp)
+                await self._set("PICK", "handover_grasp", part_type, 0.15)
+                await move_to("handover_grasp", target=grasp, guard=confirm_grasp)
+                confirm_grasp()
                 await loop.run_in_executor(None, robot.set_gripper, True)
                 sim.set_state(mode="inspect", holding=True, opening=0.0, action="Teil übernommen")
                 await asyncio.sleep(config.STEP_PAUSE_S)

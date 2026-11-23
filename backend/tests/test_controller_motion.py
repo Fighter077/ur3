@@ -1,8 +1,9 @@
 """Motion-mode regression tests; no robot connection is created."""
+from io import BytesIO
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, call, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from robot.controller import RTDEController, RobotError
@@ -83,6 +84,38 @@ class MotionTests(unittest.TestCase):
         self.control.moveL.return_value = False
         with self.assertRaises(RobotError):
             self.robot.move_tcp(self.pose)
+
+    def test_hand_e_feedback_distinguishes_contact_empty_and_fault(self):
+        self.robot._ip = "192.0.2.10"
+        with patch.object(controller.config, "GRIPPER_TYPE", "robotiq"):
+            for obj, fault, expected in ((2, 0, True), (3, 0, False), (2, 14, False)):
+                with self.subTest(obj=obj, fault=fault):
+                    connection = MagicMock()
+                    connection.__enter__.return_value = connection
+                    connection.makefile.return_value = BytesIO(
+                        f"STA 3\nGTO 1\nFLT {fault}\nPOS 122\nOBJ {obj}\n".encode()
+                    )
+                    with patch.object(controller.socket, "create_connection", return_value=connection):
+                        result = self.robot.get_gripper_status()
+                    self.assertEqual(result["contact_on_close"], expected)
+                    self.assertEqual(result["position"], 122)
+                    self.assertEqual(result["fault"], fault)
+                    self.assertEqual(connection.sendall.call_args_list, [
+                        call(b"GET STA\n"), call(b"GET GTO\n"), call(b"GET FLT\n"),
+                        call(b"GET POS\n"), call(b"GET OBJ\n"),
+                    ])
+
+    def test_hand_e_rejects_unavailable_status(self):
+        self.robot._ip = "192.0.2.10"
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.makefile.return_value = BytesIO(b"STA ?\n")
+        with (
+            patch.object(controller.config, "GRIPPER_TYPE", "robotiq"),
+            patch.object(controller.socket, "create_connection", return_value=connection),
+        ):
+            with self.assertRaisesRegex(RobotError, "Hand-E status unavailable"):
+                self.robot.get_gripper_status()
 
 
 if __name__ == "__main__":

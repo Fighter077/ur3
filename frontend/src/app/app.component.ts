@@ -18,6 +18,7 @@ import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { RobotService } from './services/robot.service';
+import { CalibrationWizardComponent } from './calibration-wizard.component';
 import { Analysis, ControlMode, Hand, HandoverObservation, InspectionSource, InspectionState, InventoryRecord, RobotState, SimState } from './interfaces';
 
 // MediaPipe-Hand: Verbindungen der 21 Landmarks (Handgelenk + 5 Finger) für das Overlay.
@@ -38,7 +39,7 @@ const HAND_EDGES: [number, number][] = [
     MatToolbarModule, MatButtonModule, MatIconModule, MatCardModule,
     MatFormFieldModule, MatInputModule, MatSelectModule, MatProgressBarModule, MatTableModule,
     MatChipsModule, MatTooltipModule, MatDividerModule, MatSnackBarModule,
-    MatButtonToggleModule, TranslatePipe,
+    MatButtonToggleModule, TranslatePipe, CalibrationWizardComponent,
   ],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss',
@@ -46,6 +47,7 @@ const HAND_EDGES: [number, number][] = [
 export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('video') videoEl!: ElementRef<HTMLVideoElement>;
   @ViewChild('interfaceQrDialog') interfaceQrDialog!: ElementRef<HTMLDialogElement>;
+  @ViewChild('calibrationDialog') calibrationDialog!: ElementRef<HTMLDialogElement>;
   interfaceQr: { url: string; png: string } | null = null;
   interfaceQrLoading = false;
 
@@ -71,6 +73,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   localHandover: HandoverObservation | null = null;
   remoteHandover: HandoverObservation | null = null;
   handoverReady = false;
+  handoverCalibrated: boolean | null = null;
+  handoverTcp: [number, number, number] | null = null;
   robotUseReal = false;              // false = Simulation (Mock), true = echter UR3e
   robotIp = '';
   robotIpEdited = false;
@@ -158,6 +162,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       if (observation.network_camera) this.remoteHandover = observation;
       else this.localHandover = observation;
       this.handoverReady = observation.ready;
+      this.handoverCalibrated = observation.calibrated;
+      this.handoverTcp = observation.grasp_tcp_m;
     });
     this.svc.networkCameraEnded$.pipe(takeUntilDestroyed()).subscribe(() => {
       if (this.remoteCameraAvailable) this.onNetworkCameraError();
@@ -166,6 +172,13 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   private onAck(a: any) {
     if (!a) return;
+    if (a.action === 'get_gripper_status' && a.ok) {
+      const state = a.result;
+      const key = !state.active ? 'telemetry.handEInactive'
+        : state.contact_on_close ? 'telemetry.handEContact' : 'telemetry.handENoContact';
+      this.snack.open(this.t.instant(key, state), 'OK', { duration: 6000 });
+      return;
+    }
     if (a.action === 'teach_pose') {
       const r = a.result || {};
       const msg = r.ok
@@ -270,6 +283,11 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  showCalibration() {
+    if (this.controlMode !== 'handover') this.setControlMode('handover');
+    this.calibrationDialog.nativeElement.showModal();
+  }
+
   retryRemoteCamera() {
     this.networkCameraFailed = false;
     this.svc.retryRemoteCamera();
@@ -295,6 +313,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.localHandover = null;
     this.remoteHandover = null;
     this.handoverReady = false;
+    this.handoverCalibrated = null;
+    this.handoverTcp = null;
   }
 
   setControlMode(mode: ControlMode) {
@@ -380,6 +400,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.svc.abortInspection();
   }
   gripper(closed: boolean) { this.svc.gripper(closed); }
+  getGripperStatus() { this.svc.getGripperStatus(); }
   teachPose(name: string) { this.svc.teachPose(name); }
 
   fmt(v: number | undefined, d = 3): string {

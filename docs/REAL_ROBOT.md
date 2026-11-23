@@ -190,3 +190,40 @@ podman exec ur3-backend python /app/perception/multiview_pose.py /app/data/obser
 
 The result describes the target frame in robot-base coordinates. This tool takes recorded
 observations and has no robot-command connection.
+
+### Live 3D handover in simulation
+
+Keep the cameras fixed, with overlapping views of the presentation area. Attach a rigid
+ArUco marker from `DICT_4X4_50` to the component. Use the printed square's outer marker
+edge to measure its size. The marker frame starts at its top-left corner, with +X toward
+the top-right corner and +Y toward the bottom-left corner.
+
+With both cameras connected, click **Calibrate cameras** in the camera panel.
+Download the ChArUco board from the wizard, mount the print flat, and enter the
+measured square size. Capture the board in at least eight positions and tilts,
+covering different parts of both images. The cameras stay fixed. Then capture the
+board at a known, measured pose in the UR3e base frame. Copy the current TCP only
+if the active TCP frame actually coincides with the board frame.
+
+The wizard asks for the test part's marker and grasp geometry, checks reprojection
+errors for both cameras, and saves `backend/data/handover_calibration.json`. Handover
+simulation can use it immediately. For manual calibration, the same file uses:
+
+- `local_camera` and `remote_camera` with the intrinsics, distortion, and base-to-camera
+  extrinsics from the offline estimator. Give each its original `image_size_px` as
+  `[width, height]`. Open the handover controls from the browser corresponding to
+  `local_camera`. Keep camera roles, orientation, and frame sizes the same as during
+  calibration.
+- `marker_id`, `marker_size_m`, and the measured tool pose relative to that marker as
+  `tcp_in_marker_translation_m` and `tcp_in_marker_rvec`. The latter is a Rodrigues
+  rotation vector in radians and rotates tool coordinates into the marker frame.
+- `approach_distance_m` and `workspace_min_m` / `workspace_max_m` as robot-base XYZ
+  bounds for the simulation. The approach pose is offset from the grasp pose along the
+  negative tool Z axis.
+
+Select **Handover** while both cameras see the marker, then hold the part still. A pose
+requires three consistent pairs of observations. The prototype rejects pairs with poor
+reprojection fit, low triangulation angle, stale frames, or mismatched image sizes. Pairing
+uses server receive times. Validate the result against measured positions in the real
+workspace before designing a physical approach. The configured bounds and vision checks
+are estimation checks for the mock sequence.

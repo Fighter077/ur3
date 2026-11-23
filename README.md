@@ -129,14 +129,12 @@ dafür auch UDP zum Backend-Rechner zulassen.
 
 ## Perzeption & Kamera
 
-- **Simulierte Übergabe**: `OBJECTS_ENABLED=true` in der `.env` setzen und
-  den Backend-Container neu erstellen. Desktop- und Handy-Kamera gleichzeitig verbinden
-  und **Handover** wählen. Die App markiert die als Smartphone erkannte Komponente in
-  beiden Ansichten. Wenn sie in beiden Bildern neben einer Hand stabil erkannt wird,
-  kann **Simulate handover** am Desktop den Mock-Greifer schließen und die Inspektion
-  starten. Die Bestätigung prüft die zwei Ansichten erneut auf Aktualität. Die Bildprüfung
-  dient der Simulation. Für die Hardware-Übergabe werden eine eingemessene Pose und eine
-  verlässliche Greifer-Rückmeldung benötigt.
+- **Simulierte 3D-Übergabe**: Beide Kameras im Roboter-Basiskoordinatensystem kalibrieren,
+  einen ArUco-Marker am Teil befestigen und die Kalibrierdatei hinterlegen.
+  In **Handover** zeigt die App die geschätzte Greifposition. **Simulate handover**
+  fährt im Mock-Modus die Annäherungs- und Greifpose an. Bei einem bewegten oder
+  verlorenen Ziel bricht die Simulation vor dem Schließen ab.
+  [Kalibrierdatei und Ablauf](docs/REAL_ROBOT.md#live-3d-handover-in-simulation)
 
 - **Geste** (MediaPipe HandLandmarker): rein als **Trigger**; der Roboter wird manuell/standalone
   gestartet (keine direkte Roboter-Software-Kopplung, wie im Poster).

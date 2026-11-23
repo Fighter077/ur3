@@ -28,6 +28,8 @@ export interface HandoverObservation {
   hands: Hand[];
   objects: Detection[];
   ready: boolean;
+  calibrated: boolean;
+  grasp_tcp_m: [number, number, number] | null;
 }
 
 export interface Hand {

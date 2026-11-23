@@ -1,6 +1,7 @@
 """Trigger routing without camera/model dependencies or robot hardware."""
 import ast
 import asyncio
+import math
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -52,13 +53,12 @@ class GestureTests(unittest.IsolatedAsyncioTestCase):
         run = definition("rtc.py", "_process_frames", {
             "CameraSource": object,
             "camera_is_selected": lambda client_id, network: not network,
-            "_objects": None,
             "asyncio": SimpleNamespace(get_running_loop=lambda: SimpleNamespace(run_in_executor=execute)),
             "time": time, "config": config, "GestureTrigger": trigger_class,
             "frames": SimpleNamespace(set_frame=Mock()),
-            "_detect_latest": AsyncMock(side_effect=lambda source: (object(), time.monotonic(), [{"gesture": "open"}], [])),
+            "_detect_latest": AsyncMock(side_effect=lambda source: (object(), time.monotonic(), [{"gesture": "open"}], [], None)),
             "get_cell": lambda: cell, "send_to": send, "MediaStreamError": EndStream,
-            "sim": SimpleNamespace(gesture_enabled=lambda: True,
+            "sim": SimpleNamespace(control_mode=lambda: "gesture", gesture_enabled=lambda: True,
                                    update_idle=lambda hands: ({}, True, 1.0)),
         })
         await run("client", Queue(), object())
@@ -69,31 +69,39 @@ class GestureTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HandoverTests(unittest.TestCase):
-    def test_requires_current_stable_hand_and_object_in_each_view(self):
+    def test_requires_three_distinct_fresh_pairs_and_clears_on_loss(self):
         clock = Mock(return_value=10.0)
-        observation_class = definition("perception/handover.py", "HandoverObservation", {
-            "monotonic": clock, "_PHONE_CLASSES": {"cell phone"},
-            "_MAX_AGE_S": 1.5, "_STABLE_SAMPLES": 3,
-        })
-        observation = observation_class()
-        hand = [{"landmarks": [[0.5, 0.5]]}]
-        distant_hand = [{"landmarks": [[0.0, 0.0]]}]
-        part = [{"class": "cell phone", "bbox": [0.4, 0.4, 0.6, 0.6]}]
-        for _ in range(3):
-            observation.update(False, hand, part)
-            observation.update(True, distant_hand, part)
-        self.assertFalse(observation.ready())
-        for _ in range(3):
-            observation.update(True, hand, part)
-        self.assertTrue(observation.ready())
-        clock.return_value += 2.0
-        self.assertFalse(observation.ready())
+        ns = {
+            "math": math, "monotonic": clock, "_STABLE_SAMPLES": 3,
+            "_MAX_PAIR_SKEW_S": 0.2, "_MAX_GRASP_AGE_S": 0.6,
+        }
+        ns["same_grasp"] = definition("perception/handover.py", "same_grasp", ns)
+        tracker_class = definition("perception/handover.py", "GraspTracking", ns)
+        plan = ((.4, .1, .4, 0, 0, 0), (.4, .1, .45, 0, 0, 0))
+        geometry = Mock()
+        geometry.estimate.return_value = plan
+        tracker = tracker_class(geometry)
+        for i in range(3):
+            clock.return_value = stamp = 10.0 + i * .15
+            tracker.update(False, "local", stamp - .03)
+            tracker.update(False, "local", stamp - .02)
+            self.assertIsNone(tracker.candidate())
+            tracker.update(True, "remote", stamp)
+        self.assertEqual(tracker.candidate(), plan)
+        self.assertEqual(geometry.estimate.call_count, 3)
+        clock.return_value += 1
+        self.assertIsNone(tracker.candidate())
+        tracker.update(False, "local", clock.return_value - .02)
+        tracker.update(True, "remote", clock.return_value)
+        self.assertIsNone(tracker.candidate())
+        tracker.update(True, None, clock.return_value)
+        self.assertIsNone(tracker.candidate())
 
 
 class CameraSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_viewers_share_one_detection_and_skip_queued_frames(self):
         now = Mock(return_value=2.0)
-        perceive = Mock(return_value=([], []))
+        perceive = Mock(return_value=([], [], None))
         async def execute(_executor, fn, *args):
             await asyncio.sleep(0)
             return fn(*args)
