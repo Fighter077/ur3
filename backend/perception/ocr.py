@@ -108,6 +108,19 @@ class LabelReader:
             print(f"[ocr] Tesseract nicht verfügbar ({e}) -> OCR liefert nur status 'review'.")
             self._tess = None
 
+    @property
+    def uses_openai(self) -> bool:
+        return self._openai
+
+    @staticmethod
+    def frame_quality(frame: np.ndarray) -> float:
+        height, width = frame.shape[:2]
+        scale = min(1, 800 / max(height, width))
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if scale < 1:
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        return float(cv2.Laplacian(gray, cv2.CV_32F).var())
+
     def read(self, frame_bgr: Optional[np.ndarray]) -> dict:
         empty = {"raw_text": "", "manufacturer": None, "model": None,
                  "capacity": None, "speed": None, "type": None, "status": "review"}
@@ -142,35 +155,60 @@ class LabelReader:
 
     # ---- OpenAI Vision (liest + parst in einem) ----
     _OPENAI_PROMPT = (
-        "Du liest das Etikett eines ausgebauten PC-Bauteils (HDD, optisches Laufwerk oder RAM). "
-        "Gib NUR ein JSON-Objekt zurueck mit den Feldern: manufacturer (Hersteller/Marke), "
+        "Lies den sichtbaren Aufdruck auf einem PC-Bauteil für einen Inventareintrag. "
+        "Gib genau ein JSON-Objekt mit diesen Feldern zurück: manufacturer (Hersteller/Marke), "
         "model (Modell-/Teilenummer), capacity (z.B. '1TB' oder '16GB'), "
         "speed (z.B. 'PC4-3200AA' oder '7200rpm', sonst null), type ('HDD'|'optical'|'RAM'|null), "
-        "raw_text (der gesamte lesbare Text auf dem Etikett). Unbekannte Felder = null. "
-        "Antworte ausschliesslich mit dem JSON, ohne Erklaerung. Überprüfe, ob die Werte plausibel sind, vergleiche insbesondere Hersteller und Modellnummer, und korrigiere offensichtliche OCR-Fehler (z.B. 'O' vs. '0', 'I' vs. '1')."
+        "raw_text (wörtliche Abschrift des lesbaren Aufdrucks). "
+        "Übernimm Modellnummern wie abgebildet. Setze nicht sicher lesbare Felder auf null."
     )
 
-    def _openai_fields(self, img: np.ndarray) -> dict:
+    def read_pair(self, front: np.ndarray, back: np.ndarray) -> dict:
+        """Send the front above the back as one image."""
+        front_height, front_width = front.shape[:2]
+        back_height, back_width = back.shape[:2]
+        width = max(front_width, back_width)
+        composite = np.zeros((front_height + back_height, width, 3), dtype=front.dtype)
+        front_left = (width - front_width) // 2
+        back_left = (width - back_width) // 2
+        composite[:front_height, front_left:front_left + front_width] = front
+        composite[front_height:, back_left:back_left + back_width] = back
+        return self._openai_fields(composite, stacked=True)
+
+    def _openai_fields(self, frame: np.ndarray, *, stacked: bool = False) -> dict:
         import base64
         import json
         import requests
 
         empty = {"raw_text": "", "manufacturer": None, "model": None,
                  "capacity": None, "speed": None, "type": None, "status": "review"}
-        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        try:
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        except cv2.error:
+            ok = False
         if not ok:
-            return empty
+            return {**empty, "error": "Could not encode camera image"}
+
+        prompt = self._OPENAI_PROMPT
+        if stacked:
+            prompt += (
+                " Das einzelne Bild enthält zwei übereinander angeordnete Fotos desselben Bauteils: "
+                "oben die Vorderseite, unten die Rückseite. Lies den lesbaren Text aus beiden Fotos. "
+                "Nutze Angaben von beiden Seiten, um genau ein JSON-Objekt für das Bauteil auszufüllen. "
+                "Gib in raw_text zuerst den Text der Vorderseite und danach den Text der Rückseite aus. "
+                "Wenn eine Seite keinen lesbaren Text enthält, verwende die Angaben der anderen Seite. "
+                "Wenn sich ein Feld anhand beider Fotos nicht zuverlässig bestimmen lässt, setze es auf null."
+            )
         b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+        ]
         payload = {
             "model": config.OPENAI_MODEL,
-            "temperature": 0,
-            "max_tokens": 500,
+            "max_completion_tokens": 2000,
             "response_format": {"type": "json_object"},
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": self._OPENAI_PROMPT},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
-            ]}],
+            "messages": [{"role": "user", "content": content}],
         }
         try:
             r = requests.post(
@@ -179,12 +217,26 @@ class LabelReader:
                 json=payload, timeout=60,
             )
             if r.status_code != 200:
-                print(f"[ocr] OpenAI HTTP {r.status_code}: {r.text[:200]}")
-                return empty
-            data = json.loads(r.json()["choices"][0]["message"]["content"])
-        except Exception as e:
-            print(f"[ocr] OpenAI-Fehler: {type(e).__name__}: {e}")
-            return empty
+                return {**empty, "error": f"OpenAI returned HTTP {r.status_code}"}
+            choice = r.json()["choices"][0]
+            message = choice["message"]
+            refusal = (message.get("refusal") or "").strip()
+            if refusal:
+                return {**empty, "error": f"OpenAI declined the image review: {refusal}"}
+            if choice.get("finish_reason") == "content_filter":
+                return {**empty, "error": "OpenAI's content filter blocked the image review"}
+            if choice.get("finish_reason") == "length":
+                return {**empty, "error": "OpenAI returned an incomplete OCR result"}
+            data = json.loads(message["content"])
+            if not isinstance(data, dict) or any(
+                data.get(field) is not None and not isinstance(data[field], str)
+                for field in ("manufacturer", "model", "capacity", "speed", "type", "raw_text")
+            ):
+                return {**empty, "error": "OpenAI returned invalid OCR fields"}
+        except requests.RequestException as e:
+            return {**empty, "error": f"OpenAI request failed ({type(e).__name__})"}
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            return {**empty, "error": "OpenAI returned an invalid OCR response"}
 
         fields = {
             "manufacturer": data.get("manufacturer") or None,

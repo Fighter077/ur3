@@ -28,7 +28,7 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
         self.config = SimpleNamespace(
             POSES_FILE="/nonexistent/inspection-test-poses.json", PART_TYPES=["HDD"],
             MOVE_POS_TOL_M=0.002, MOVE_ROT_TOL_RAD=0.02, MOVE_TIMEOUT_S=1,
-            STEP_PAUSE_S=0, INSPECT_SETTLE_S=0, OCR_ENGINE="openai",
+            STEP_PAUSE_S=0, INSPECT_SETTLE_S=0, OCR_ATTEMPTS=1,
             INSPECT_FLIP_SPEED=0.15,
             INSPECT_STILL_S=0.1,
         )
@@ -41,6 +41,7 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
         self.robot.get_state.side_effect = self.state
         self.robot.set_gripper.side_effect = lambda closed: self.events.append(("grip", closed))
         self.reader = Mock()
+        self.reader.uses_openai = False
         self.reader.read.return_value = {"status": "identified", "raw_text": "label"}
         inv = Mock()
         self.inventory = inv
@@ -144,6 +145,38 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
         record = self.inventory.add_record.call_args.args[0]
         self.assertEqual(record["type"], "RAM")
         self.assertEqual(record["status"], "identified")
+
+    async def test_openai_reads_and_saves_the_sharpest_fresh_pair_once(self):
+        self.config.OCR_ATTEMPTS = 2
+        self.reader.uses_openai = True
+        captured = Mock(side_effect=["soft front", "sharp front", "sharp back", "soft back"])
+        self.ns["frames"].best_for_ocr = captured
+        self.reader.frame_quality.side_effect = [1., 3., 4., 2.]
+        self.reader.read_pair.return_value = {
+            "status": "identified", "raw_text": "DDR4 16GB", "type": "RAM",
+        }
+        await self.cell._run_cycle("auto", "manual")
+        self.reader.read.assert_not_called()
+        self.reader.read_pair.assert_called_once_with("sharp front", "sharp back")
+        self.assertTrue(all(call.kwargs["since"] > 0 for call in captured.call_args_list))
+        self.assertEqual(
+            [call.args[1:] for call in self.inventory.save_image.call_args_list],
+            [("front", "sharp front"), ("back", "sharp back")],
+        )
+        record = self.inventory.add_record.call_args.args[0]
+        self.assertEqual((record["type"], record["ocr_text"]), ("RAM", "DDR4 16GB"))
+
+    async def test_missing_back_photo_skips_openai_and_surfaces_capture_error(self):
+        self.reader.uses_openai = True
+        self.ns["frames"].best_for_ocr = Mock(side_effect=["front", "front", None, None])
+        self.reader.frame_quality.return_value = 1.0
+
+        await self.cell._run_cycle("auto", "handover")
+
+        self.reader.read_pair.assert_not_called()
+        self.assertEqual(self.inventory.add_record.call_args.args[0]["status"], "review")
+        self.assertIn("back", self.cell.state()["error"])
+        self.inventory.save_image.assert_any_call("test", "front", "front")
 
     async def test_conflicting_types_are_unknown_and_need_review(self):
         self.reader.read.side_effect = [

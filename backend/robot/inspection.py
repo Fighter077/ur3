@@ -171,22 +171,35 @@ class InspectionCell:
 
     async def _read_side(self, loop, reader) -> tuple:
         best, best_frame, best_score = None, None, -1
-        # OpenAI ist pro Bild zuverlässig -> 1 Call/Seite (spart API-Kosten); lokale Engines mehrfach.
-        n = 1 if config.OCR_ENGINE == "openai" else max(1, config.OCR_ATTEMPTS)
+        n = max(1, config.OCR_ATTEMPTS)
+        settle = config.INSPECT_SETTLE_S
+        if reader.uses_openai:
+            # The browser posts a full-resolution still every 600 ms.
+            settle = max(1.5, settle)
+            n = max(2, n)
+        capture_started = time.monotonic()
         for _ in range(n):
             if self._abort:
                 break
-            await asyncio.sleep(config.INSPECT_SETTLE_S / n)
+            await asyncio.sleep(settle / n)
             self._ck()
+            if reader.uses_openai:
+                fr = frames.best_for_ocr(since=capture_started)
+                if fr is not None:
+                    score = await loop.run_in_executor(None, reader.frame_quality, fr)
+                    if score > best_score:
+                        best_frame, best_score = fr, score
+                continue
             fr = frames.best_for_ocr()   # scharfes Hi-Res-Standbild bevorzugt
             res = await loop.run_in_executor(None, reader.read, fr)
             score = (10 if res.get("status") == "identified" else 0) + len(res.get("raw_text", ""))
             if score > best_score:
                 best, best_frame, best_score = res, fr, score
-        return (best or reader.read(None)), best_frame
+        return ({} if reader.uses_openai else best or reader.read(None)), best_frame
 
     # ---- Zyklus ----
     async def _run_cycle(self, part_type: str, source: str):
+        ocr_error = None
         loop = asyncio.get_running_loop()
         robot = get_controller()
         # Reader-Konstruktion (EasyOCR/Torch) kann mehrere Sekunden dauern -> im Executor,
@@ -268,7 +281,7 @@ class InspectionCell:
             res_back, back = await self._capture_side(loop, reader)
 
             self._ck()
-            if part_type == "auto":
+            if part_type == "auto" and not reader.uses_openai:
                 part_type = detected_part_type(res_front, res_back) or "unknown"
             await self._set("INSPECT", "back_clearance", part_type, 0.65)
             sim.set_state(action="Abstand zum Bildschirm herstellen")
@@ -279,8 +292,24 @@ class InspectionCell:
             await self._set("READ", "ocr", part_type, 0.75)
             sim.set_state(action="wertet Label aus (OCR)…")
             await asyncio.sleep(config.STEP_PAUSE_S)
-            best = res_front if res_front.get("status") == "identified" else (
-                res_back if res_back.get("status") == "identified" else res_front)
+            if reader.uses_openai:
+                if front is None or back is None:
+                    missing = ", ".join(side for side, frame in (("front", front), ("back", back))
+                                        if frame is None)
+                    best = {"error": f"No fresh camera image for: {missing}"}
+                else:
+                    best = await loop.run_in_executor(None, reader.read_pair, front, back)
+                self._ck()
+                ocr_error = best.get("error")
+                if ocr_error:
+                    print(f"[inspection][ocr] {ocr_error}", flush=True)
+                if part_type == "auto":
+                    part_type = detected_part_type(best) or "unknown"
+                ocr_text = best.get("raw_text", "")
+            else:
+                best = res_front if res_front.get("status") == "identified" else (
+                    res_back if res_back.get("status") == "identified" else res_front)
+                ocr_text = (res_front.get("raw_text", "") + "\n---\n" + res_back.get("raw_text", "")).strip()
 
             rec = inv.add_record({
                 "type": part_type,
@@ -288,7 +317,7 @@ class InspectionCell:
                 "model": best.get("model"),
                 "capacity": best.get("capacity") or best.get("speed"),
                 "condition": "unrated",
-                "ocr_text": (res_front.get("raw_text", "") + "\n---\n" + res_back.get("raw_text", "")).strip(),
+                "ocr_text": ocr_text,
                 "status": best.get("status", "review") if part_type != "unknown" else "review",
                 "source": source,
             })
@@ -303,7 +332,7 @@ class InspectionCell:
             # --- Sortieren / Ablage ---
             identified = best.get("status") == "identified" and part_type != "unknown"
             await self._set("SORT", "collection" if identified else "review",
-                            part_type, 0.90, record_id=rec["id"])
+                            part_type, 0.90, record_id=rec["id"], error=ocr_error)
             sim.set_state(mode="inspect", x=0.2 if identified else 0.8, y=0.72, holding=True,
                           action="sortiert ab" if identified else "Review-Ablage")
             await asyncio.sleep(config.STEP_PAUSE_S)
@@ -313,7 +342,7 @@ class InspectionCell:
             await asyncio.sleep(config.STEP_PAUSE_S)
             await move_to("home")
 
-            await self._set("DONE", "done", part_type, 1.0, record_id=rec["id"])
+            await self._set("DONE", "done", part_type, 1.0, record_id=rec["id"], error=ocr_error)
             await asyncio.sleep(config.STEP_PAUSE_S)
         except _Aborted:
             await self._set("ABORTED", "aborted", part_type, 0.0)
@@ -337,7 +366,7 @@ class InspectionCell:
                 self._abort = False
             sim.set_state(mode="ready", x=sim.READY[0], y=sim.READY[1], holding=False,
                           opening=1.0, action="bereit")
-            await self._set("idle", "", None, 0.0)
+            await self._set("idle", "", None, 0.0, error=ocr_error)
 
     # ---- Zustand / Broadcast ----
     async def _set(self, state, step, part_type, progress, record_id=None, error=None):
