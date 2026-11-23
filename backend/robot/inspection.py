@@ -72,7 +72,7 @@ class InspectionCell:
         self._state = {"state": "idle", "step": "", "part_type": None,
                        "progress": 0.0, "record_id": None, "error": None,
                        "capture_active": False}
-        self.poses = self._load_poses()
+        self.poses = self._load_poses() if config.ROBOT_ENABLED else {}
 
     # ---- Posen (Datei) ----
     def _load_poses(self) -> dict:
@@ -126,6 +126,8 @@ class InspectionCell:
         if part_type != "auto" and part_type not in config.PART_TYPES:
             return {"ok": False, "error": f"Unknown part type: {part_type}"}
         with self._lock:
+            if not config.ROBOT_ENABLED and source != "spacebar":
+                return {"ok": False, "error": "Press Space to start manual inspection"}
             if self._running:
                 return {"ok": False, "error": "inspection already running"}
             if self._loop is None:
@@ -140,6 +142,8 @@ class InspectionCell:
         with self._lock:
             was_running = self._running
             self._abort = True
+        if not config.ROBOT_ENABLED:
+            return {"ok": True, "was_running": was_running}
         try:
             get_controller().stop()  # unterbricht ein laufendes moveL/jog (thread-sicher)
         except Exception as e:
@@ -154,11 +158,11 @@ class InspectionCell:
             raise _Aborted()
 
     # ---- Capture + OCR über mehrere Frames im Zeitfenster ----
-    async def _capture_side(self, loop, reader) -> tuple:
+    async def _capture_side(self, loop, reader, *, defer_ocr=False) -> tuple:
         self._ck()
         await self._set_capture_active(True)
         try:
-            return await self._read_side(loop, reader)
+            return await self._read_side(loop, reader, defer_ocr=defer_ocr)
         finally:
             await self._set_capture_active(False)
 
@@ -169,11 +173,11 @@ class InspectionCell:
         from websocket_hub import broadcast
         await broadcast({"type": "inspection", **snap})
 
-    async def _read_side(self, loop, reader) -> tuple:
+    async def _read_side(self, loop, reader, *, defer_ocr=False) -> tuple:
         best, best_frame, best_score = None, None, -1
         n = max(1, config.OCR_ATTEMPTS)
         settle = config.INSPECT_SETTLE_S
-        if reader.uses_openai:
+        if reader.uses_openai or defer_ocr:
             # The browser posts a full-resolution still every 600 ms.
             settle = max(1.5, settle)
             n = max(2, n)
@@ -183,7 +187,7 @@ class InspectionCell:
                 break
             await asyncio.sleep(settle / n)
             self._ck()
-            if reader.uses_openai:
+            if reader.uses_openai or defer_ocr:
                 fr = frames.best_for_ocr(since=capture_started)
                 if fr is not None:
                     score = await loop.run_in_executor(None, reader.frame_quality, fr)
@@ -195,17 +199,14 @@ class InspectionCell:
             score = (10 if res.get("status") == "identified" else 0) + len(res.get("raw_text", ""))
             if score > best_score:
                 best, best_frame, best_score = res, fr, score
-        return ({} if reader.uses_openai else best or reader.read(None)), best_frame
+        return ({} if reader.uses_openai or defer_ocr else best or reader.read(None)), best_frame
 
     # ---- Zyklus ----
     async def _run_cycle(self, part_type: str, source: str):
         ocr_error = None
         loop = asyncio.get_running_loop()
-        robot = get_controller()
-        # Reader-Konstruktion (EasyOCR/Torch) kann mehrere Sekunden dauern -> im Executor,
-        # damit der Event-Loop (und WebRTC) nicht blockiert. Beim Warmup ist er meist schon da.
-        reader = await loop.run_in_executor(None, get_reader)
-        inv = get_inventory()
+        robot = None
+        terminal = None
 
         async def move_to(name, speed=None):
             # Asynchrone Fahrt starten und auf Zielerreichung ODER Abbruch warten -> ESC/Not-Halt
@@ -247,58 +248,72 @@ class InspectionCell:
             print(f"[inspection][motion] reached {name}", flush=True)
 
         try:
-            await self._set("PICK", "pick", part_type, 0.05)
-            if source == "handover":
-                sim.set_state(mode="inspect", holding=True, opening=0.0, action="Teil übernommen")
-                await asyncio.sleep(config.STEP_PAUSE_S)
+            robot = get_controller() if config.ROBOT_ENABLED else None
+            reader = await loop.run_in_executor(None, get_reader)
+            inv = get_inventory()
+            if robot is None:
+                await self._set("INSPECT", "front", part_type, 0.30)
+                await asyncio.sleep(config.MANUAL_SIDE_PREP_S)
+                res_front, front = await self._capture_side(loop, reader, defer_ocr=True)
+                await self._set("INSPECT", "back", part_type, 0.55)
+                await asyncio.sleep(config.MANUAL_SIDE_PREP_S)
+                res_back, back = await self._capture_side(loop, reader, defer_ocr=True)
             else:
-                sim.set_state(mode="inspect", x=0.75, y=0.62, holding=False, opening=1.0,
-                              action="greift Teil aus Halter")
-                await move_to("holder_up")
+                await self._set("PICK", "pick", part_type, 0.05)
+                if source == "handover":
+                    sim.set_state(mode="inspect", holding=True, opening=0.0, action="Teil übernommen")
+                    await asyncio.sleep(config.STEP_PAUSE_S)
+                else:
+                    sim.set_state(mode="inspect", x=0.75, y=0.62, holding=False, opening=1.0,
+                                  action="greift Teil aus Halter")
+                    await move_to("holder_up")
+                    self._ck()
+                    await loop.run_in_executor(None, robot.set_gripper, False)
+                    await asyncio.sleep(config.STEP_PAUSE_S)
+                    await move_to("holder")
+                    self._ck()
+                    await loop.run_in_executor(None, robot.set_gripper, True)
+                    sim.set_state(holding=True, opening=0.0)
+                    await asyncio.sleep(config.STEP_PAUSE_S)
+                    await move_to("holder_up")
+
                 self._ck()
-                await loop.run_in_executor(None, robot.set_gripper, False)
-                await asyncio.sleep(config.STEP_PAUSE_S)
-                await move_to("holder")
+                # --- Inspektion: Vorderseite ---
+                await self._set("INSPECT", "front", part_type, 0.30)
+                sim.set_state(mode="inspect", x=0.5, y=0.38, holding=True, opening=0.0,
+                              action="Vorderseite vor Kamera – Label zeigen")
+                await move_to("front")
+                res_front, front = await self._capture_side(loop, reader)
+
                 self._ck()
-                await loop.run_in_executor(None, robot.set_gripper, True)
-                sim.set_state(holding=True, opening=0.0)
-                await asyncio.sleep(config.STEP_PAUSE_S)
-                await move_to("holder_up")
+                # --- Inspektion: Rückseite ---
+                await self._set("INSPECT", "back", part_type, 0.55)
+                sim.set_state(action="Rückseite (180° gedreht) – Label zeigen")
+                await move_to("back", speed=config.INSPECT_FLIP_SPEED)
+                res_back, back = await self._capture_side(loop, reader)
 
-            self._ck()
-            # --- Inspektion: Vorderseite ---
-            await self._set("INSPECT", "front", part_type, 0.30)
-            sim.set_state(mode="inspect", x=0.5, y=0.38, holding=True, opening=0.0,
-                          action="Vorderseite vor Kamera – Label zeigen")
-            await move_to("front")
-            res_front, front = await self._capture_side(loop, reader)
-
-            self._ck()
-            # --- Inspektion: Rückseite ---
-            await self._set("INSPECT", "back", part_type, 0.55)
-            sim.set_state(action="Rückseite (180° gedreht) – Label zeigen")
-            await move_to("back", speed=config.INSPECT_FLIP_SPEED)
-            res_back, back = await self._capture_side(loop, reader)
-
-            self._ck()
-            if part_type == "auto" and not reader.uses_openai:
-                part_type = detected_part_type(res_front, res_back) or "unknown"
-            await self._set("INSPECT", "back_clearance", part_type, 0.65)
-            sim.set_state(action="Abstand zum Bildschirm herstellen")
-            await move_to("back_clearance")
+                self._ck()
+                if part_type == "auto" and not reader.uses_openai:
+                    part_type = detected_part_type(res_front, res_back) or "unknown"
+                await self._set("INSPECT", "back_clearance", part_type, 0.65)
+                sim.set_state(action="Abstand zum Bildschirm herstellen")
+                await move_to("back_clearance")
 
             self._ck()
             # --- OCR-Ergebnis / Datensatz ---
             await self._set("READ", "ocr", part_type, 0.75)
-            sim.set_state(action="wertet Label aus (OCR)…")
+            if robot is not None:
+                sim.set_state(action="wertet Label aus (OCR)…")
             await asyncio.sleep(config.STEP_PAUSE_S)
-            if reader.uses_openai:
-                if front is None or back is None:
-                    missing = ", ".join(side for side, frame in (("front", front), ("back", back))
-                                        if frame is None)
-                    best = {"error": f"No fresh camera image for: {missing}"}
-                else:
-                    best = await loop.run_in_executor(None, reader.read_pair, front, back)
+            missing = ", ".join(side for side, frame in (("front", front), ("back", back))
+                                if frame is None)
+            if missing and (robot is None or reader.uses_openai):
+                ocr_error = f"No fresh camera image for: {missing}"
+                best, ocr_text = {}, ""
+                if part_type == "auto":
+                    part_type = "unknown"
+            elif reader.uses_openai:
+                best = await loop.run_in_executor(None, reader.read_pair, front, back)
                 self._ck()
                 ocr_error = best.get("error")
                 if ocr_error:
@@ -307,6 +322,13 @@ class InspectionCell:
                     part_type = detected_part_type(best) or "unknown"
                 ocr_text = best.get("raw_text", "")
             else:
+                if robot is None:
+                    res_front = await loop.run_in_executor(None, reader.read, front)
+                    self._ck()
+                    res_back = await loop.run_in_executor(None, reader.read, back)
+                    self._ck()
+                    if part_type == "auto":
+                        part_type = detected_part_type(res_front, res_back) or "unknown"
                 best = res_front if res_front.get("status") == "identified" else (
                     res_back if res_back.get("status") == "identified" else res_front)
                 ocr_text = (res_front.get("raw_text", "") + "\n---\n" + res_back.get("raw_text", "")).strip()
@@ -329,6 +351,9 @@ class InspectionCell:
                 self._state["record_id"] = rec["id"]
 
             self._ck()
+            if robot is None:
+                terminal = ("DONE", "done", part_type, 1.0, rec["id"], ocr_error)
+                return
             # --- Sortieren / Ablage ---
             identified = best.get("status") == "identified" and part_type != "unknown"
             await self._set("SORT", "collection" if identified else "review",
@@ -345,35 +370,42 @@ class InspectionCell:
             await self._set("DONE", "done", part_type, 1.0, record_id=rec["id"], error=ocr_error)
             await asyncio.sleep(config.STEP_PAUSE_S)
         except _Aborted:
-            await self._set("ABORTED", "aborted", part_type, 0.0)
+            terminal = ("ABORTED", "aborted", part_type, 0.0)
             try:
-                await loop.run_in_executor(None, robot.stop)
+                if robot is not None:
+                    await loop.run_in_executor(None, robot.stop)
             except Exception:
                 pass
         except Exception as e:
             import traceback
             print(f"[inspection][DIAG] Zyklus-Fehler: {e!r}", flush=True)
             traceback.print_exc()
-            await self._set("ERROR", "error", part_type, 0.0, error=str(e))
+            terminal = ("ERROR", "error", part_type, 0.0, None, str(e))
             try:
-                await loop.run_in_executor(None, robot.stop)
+                if robot is not None:
+                    await loop.run_in_executor(None, robot.stop)
             except Exception:
                 pass
         finally:
             await self._set_capture_active(False)
+            if config.ROBOT_ENABLED and terminal:
+                await self._set(*terminal)
             with self._lock:
                 self._running = False
                 self._abort = False
-            sim.set_state(mode="ready", x=sim.READY[0], y=sim.READY[1], holding=False,
-                          opening=1.0, action="bereit")
-            await self._set("idle", "", None, 0.0, error=ocr_error)
+            if config.ROBOT_ENABLED:
+                sim.set_state(mode="ready", x=sim.READY[0], y=sim.READY[1], holding=False,
+                              opening=1.0, action="bereit")
+                await self._set("idle", "", None, 0.0, error=ocr_error)
+            elif terminal:
+                await self._set(*terminal)
 
     # ---- Zustand / Broadcast ----
     async def _set(self, state, step, part_type, progress, record_id=None, error=None):
         with self._lock:
             self._state.update({"state": state, "step": step, "part_type": part_type,
                                 "progress": progress, "error": error})
-            if record_id is not None:
+            if record_id is not None or (not config.ROBOT_ENABLED and state != "DONE"):
                 self._state["record_id"] = record_id
             snap = dict(self._state)
         from websocket_hub import broadcast  # lazy -> kein Zirkelimport

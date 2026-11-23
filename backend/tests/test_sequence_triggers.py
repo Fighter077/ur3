@@ -23,7 +23,7 @@ class CommandTests(unittest.TestCase):
         cell = Mock(running=False)
         cell.start.return_value = {"ok": True}
         handle = definition("websocket_hub.py", "_handle_command", {
-            "get_controller": Mock(), "get_cell": lambda: cell, "RobotError": RuntimeError})
+            "config": SimpleNamespace(ROBOT_ENABLED=True), "get_controller": Mock(), "get_cell": lambda: cell, "RobotError": RuntimeError})
         for source in ("manual", "spacebar", "gesture"):
             with self.subTest(source=source):
                 result = handle({"action": "start_inspection", "source": source, "part_type": "RAM"})
@@ -33,7 +33,7 @@ class CommandTests(unittest.TestCase):
 
 class GestureTests(unittest.IsolatedAsyncioTestCase):
     async def test_held_gesture_notifies_client_once_and_never_starts_handover(self):
-        config = SimpleNamespace(TRIGGER_GESTURE="open", TRIGGER_STABLE_FRAMES=3,
+        config = SimpleNamespace(ROBOT_ENABLED=True, TRIGGER_GESTURE="open", TRIGGER_STABLE_FRAMES=3,
                                  DETECT_EVERY_N=2)
         trigger_class = definition("perception/gesture_trigger.py", "GestureTrigger", {"config": config})
         cell = Mock(running=False)

@@ -14,7 +14,11 @@ function setup() {
     readyState = 0;
     sent = [];
     constructor() { sockets.push(this); }
-    open() { this.readyState = 1; this.onopen?.(); }
+    open(robotEnabled = true) {
+      this.readyState = 1;
+      this.onopen?.();
+      this.message({ type: "robot_config", robot_enabled: robotEnabled });
+    }
     close() { this.readyState = 3; this.onclose?.(); }
     send(data) { this.sent.push(JSON.parse(data)); }
     message(msg) { this.onmessage?.({ data: JSON.stringify(msg) }); }
@@ -168,5 +172,37 @@ test('Space uses same start path, ignores repeats, and honors mode/running state
   assert.equal(starts.length, 1);
   assert.equal(starts[0].source, 'spacebar');
   assert.equal(starts[0].part_type, 'auto');
+  h.service.disconnect();
+});
+
+test('manual mode shows illuminated prompts and keeps the result ready for the next Space', async () => {
+  const h = setup();
+  const pending = h.service.connect(h.video);
+  const socket = h.sockets[0];
+  socket.open(false);
+  await pending;
+  const key = { code: 'Space', target: null, repeat: false, isComposing: false, preventDefault() {} };
+  h.app.onKeydown(key);
+  assert.equal(socket.sent.length, 1);
+  assert.equal(socket.sent[0].source, 'spacebar');
+
+  socket.message({ type: 'inspection', state: 'INSPECT', step: 'front', capture_active: true });
+  assert.equal(h.app.capturePrompt, 'FRONT');
+  assert.equal(h.app.flashOn, true);
+  h.app.onKeydown(key);
+  assert.equal(socket.sent.length, 1);
+
+  socket.message({ type: 'inspection', state: 'INSPECT', step: 'back', capture_active: true });
+  assert.equal(h.app.capturePrompt, 'BACK');
+  assert.equal(h.app.flashOn, true);
+  socket.message({ type: 'inspection', state: 'READ', capture_active: false });
+  assert.equal(h.app.flashOn, false);
+
+  socket.message({ type: 'inventory', records: [{ id: 'manual', ocr_text: 'Label' }] });
+  socket.message({ type: 'inspection', state: 'DONE', record_id: 'manual' });
+  assert.equal(h.app.latestResult.ocr_text, 'Label');
+  h.app.onKeydown(key);
+  assert.equal(socket.sent.length, 2);
+  assert.equal(h.app.latestResult, undefined);
   h.service.disconnect();
 });

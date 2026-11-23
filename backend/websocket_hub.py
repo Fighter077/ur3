@@ -54,10 +54,14 @@ async def send_to(client_id: str, message: dict):
 # --------------------------------------------------------------------------- #
 def _handle_command(cmd: dict) -> dict:
     """Blockierender Robotercall -> in Executor ausgeführt. Gibt ein ack-dict zurück."""
-    robot = get_controller()
     action = cmd.get("action")
 
     try:
+        robot_commands = ("move_tcp", "move_joints", "jog", "approach_until_contact",
+                          "set_robot", "teach_pose", "gripper", "set_control_mode")
+        if action in robot_commands and not config.ROBOT_ENABLED:
+            raise RobotError("Robot control is disabled")
+        robot = get_controller() if config.ROBOT_ENABLED and action in robot_commands else None
         if action in ("move_tcp", "move_joints", "jog", "approach_until_contact",
                       "set_robot", "teach_pose", "gripper") and get_cell().running:
             raise RobotError("Inspection is running; abort it before manual control.")
@@ -131,7 +135,8 @@ async def ws_handler(request: web.Request):
 
     # Initialzustand an den neuen Client: Roboterkonfiguration, Inventar und Inspektionsstatus.
     try:
-        await ws.send_str(json.dumps({"type": "robot_config", "default_ip": config.ROBOT_IP}))
+        await ws.send_str(json.dumps({"type": "robot_config", "default_ip": config.ROBOT_IP,
+                                      "robot_enabled": config.ROBOT_ENABLED}))
         await ws.send_str(json.dumps({"type": "inventory", "records": get_inventory().list_records()}))
         await ws.send_str(json.dumps({"type": "inspection", **get_cell().state()}))
     except Exception:
@@ -173,6 +178,8 @@ async def telemetry_loop(app):
 
 
 async def start_telemetry(app):
+    if not config.ROBOT_ENABLED:
+        return
     app["telemetry_task"] = asyncio.create_task(telemetry_loop(app))
 
 

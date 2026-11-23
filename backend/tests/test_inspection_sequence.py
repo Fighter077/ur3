@@ -26,7 +26,7 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
             n, (ast.ClassDef, ast.FunctionDef, ast.Assign))]
         self.events = []
         self.config = SimpleNamespace(
-            POSES_FILE="/nonexistent/inspection-test-poses.json", PART_TYPES=["HDD"],
+            ROBOT_ENABLED=True, MANUAL_SIDE_PREP_S=0, POSES_FILE="/nonexistent/inspection-test-poses.json", PART_TYPES=["HDD"],
             MOVE_POS_TOL_M=0.002, MOVE_ROT_TOL_RAD=0.02, MOVE_TIMEOUT_S=1,
             STEP_PAUSE_S=0, INSPECT_SETTLE_S=0, OCR_ATTEMPTS=1,
             INSPECT_FLIP_SPEED=0.15,
@@ -91,6 +91,37 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
         if message.get("capture_active"):
             self.assertIsNone(self.pending, "Flash must wait for motion completion")
             self.events.append(("flash", list(self.current)))
+
+    async def test_manual_capture_lights_each_side_before_ocr_without_robot(self):
+        self.config.ROBOT_ENABLED = False
+        self.ns["get_controller"] = Mock(side_effect=AssertionError("Robot must stay disabled"))
+        self.ns["frames"].best_for_ocr = Mock(side_effect=lambda *, since: self.cell.state()["step"])
+        self.reader.frame_quality.return_value = 1
+
+        async def skip_wait(_delay):
+            pass
+
+        self.ns["asyncio"].sleep = skip_wait
+        self.cell = self.ns["InspectionCell"]()
+        self.cell._broadcast_inventory = AsyncMock()
+
+        def read(frame):
+            self.assertEqual(self.cell.state()["state"], "READ")
+            self.assertFalse(self.cell.state()["capture_active"])
+            return {"status": "identified", "raw_text": frame}
+
+        self.reader.read.side_effect = read
+        await self.cell._run_cycle("HDD", "spacebar")
+        lit_steps = [call.args[0]["step"] for call in self.broadcast.call_args_list
+                     if call.args[0]["capture_active"]]
+        self.assertEqual(lit_steps, ["front", "back"])
+        self.assertEqual(self.reader.read.call_args_list[0].args, ("front",))
+        self.assertEqual(self.reader.read.call_args_list[1].args, ("back",))
+        self.assertEqual(self.cell.state()["state"], "DONE")
+        self.assertEqual(self.cell.state()["record_id"], "test")
+        self.assertFalse(self.cell.running)
+        self.ns["get_controller"].assert_not_called()
+        self.ns["sim"].set_state.assert_not_called()
 
     async def test_pick_capture_speed_and_clearance_order(self):
         await self.cell._run_cycle("HDD", "manual")

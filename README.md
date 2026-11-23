@@ -40,7 +40,7 @@ Software:                         Frame-Capture ──▶ OCR ──▶ Inventar
 ## Schnellstart (Podman)
 
 ```bash
-cp .env.example .env               # ggf. ROBOT_MOCK / TRIGGER_GESTURE anpassen
+cp .env.example .env               # ggf. Einstellungen für den UR3e-Vergleich anpassen
 podman compose up -d --build       # Projekt "ur3": Backend (host-net) + Frontend
 ```
 
@@ -73,8 +73,14 @@ aus den Front-/Back-Aufnahmen. Unbekannte oder widersprüchliche Ergebnisse werd
 `unknown` zur Review markiert. Eine manuelle Typ-Auswahl bleibt optional möglich. Die
 Erkennung verändert keine Roboterposen. Eine gehaltene Geste löst erst nach Loslassen erneut aus.
 
-Standard: **Simulation** (`ROBOT_MOCK=true`) – komplett ohne UR3e testbar. Der Inspektionszyklus
-läuft dann mit simulierten Bewegungen; ohne Kamera entstehen Datensätze ohne Bild (`review`).
+Standard ist **manuelle Inspektion** (`ROBOT_ENABLED=false`). Kamera im Browser freigeben,
+das Teil mit der Vorderseite zur Kamera halten und die **Leertaste** drücken. Bei **BACK**
+das Teil wenden. Der Bildschirm leuchtet während jeder Aufnahme. Anschließend erscheint das
+OCR-Ergebnis und bleibt bis zur nächsten Inspektion sichtbar. `MANUAL_SIDE_PREP_S` steuert
+die Zeit zum Ausrichten jeder Seite vor der Beleuchtung (Standard 2 Sekunden).
+
+Für den Vergleich mit dem robotergestützten Ablauf `ROBOT_ENABLED=true` setzen.
+`ROBOT_MOCK=true` simuliert die Roboterbewegungen. `ROBOT_MOCK=false` aktiviert den echten UR3e.
 
 **Echten UR3e anbinden:** genaue Schritt-für-Schritt-Anleitung in
 **[docs/REAL_ROBOT.md](docs/REAL_ROBOT.md)** (Netzwerk, Remote Control, Posen teachen, Greifer,
@@ -85,7 +91,7 @@ Kamera, sicherer Erstlauf).
 > echte Host-Netz, deshalb hat der `backend`-Service `network_mode: host`. Compose läuft über
 > **`podman compose`** (nutzt den Podman-Socket) – **nicht** über Docker Desktops `docker compose`.
 
-## Bedienung
+## Bedienung mit aktiviertem Roboter
 
 1. **Verbinden** → die Kamera (Browser) wird als „stationäre Kamera" ans Backend gestreamt.
 2. Zyklus starten – zwei Wege:

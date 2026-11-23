@@ -13,6 +13,9 @@ class Config:
     HOST = os.getenv("BACKEND_HOST", "0.0.0.0")
     PORT = int(os.getenv("BACKEND_PORT", "8080"))
 
+    ROBOT_ENABLED = _as_bool(os.getenv("ROBOT_ENABLED"), default=False)
+    MANUAL_SIDE_PREP_S = float(os.getenv("MANUAL_SIDE_PREP_S", "2.0"))
+
     # --- UR3e / RTDE ---
     # IP des Roboters im Netz. Bei MOCK egal.
     ROBOT_IP = os.getenv("ROBOT_IP", "192.168.1.100")

@@ -1,6 +1,6 @@
 # Anbindung an den echten UR3e – Schritt für Schritt
 
-Die App läuft standardmäßig im **Mock** (`ROBOT_MOCK=true`): alles ohne Hardware testbar.
+Für den UR3e-Ablauf `ROBOT_ENABLED=true` setzen. Mit `ROBOT_MOCK=true` lässt sich der Ablauf ohne Hardware simulieren.
 Für den **echten UR3e** ändert sich nur wenig Code – vor allem **konfigurierst** du (IP, Greifer)
 und **teachst** die Posen. Diese Anleitung geht genau durch, was zu tun ist.
 
@@ -70,6 +70,7 @@ Nur Ethernet + IP – kein ROS, kein Mini-PC, kein RT-Kernel.
 In `.env` (aus `.env.example` kopiert):
 
 ```bash
+ROBOT_ENABLED=true
 ROBOT_MOCK=false
 ROBOT_IP=192.168.1.100          # IP aus Schritt 1
 # Greifer (siehe Schritt 5):

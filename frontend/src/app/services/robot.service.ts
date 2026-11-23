@@ -25,6 +25,7 @@ export class RobotService {
   private cancelSocketConnect: (() => void) | null = null;
 
   connectionState$ = new BehaviorSubject<string>('disconnected');
+  robotEnabled$ = new BehaviorSubject<boolean | null>(null);
   robotState$ = new BehaviorSubject<RobotState | null>(null);
   robotDefaultIp$ = new BehaviorSubject<string | null>(null);
   analysis$ = new BehaviorSubject<Analysis | null>(null);
@@ -48,6 +49,7 @@ export class RobotService {
     this.reconnectTimer = null;
     const generation = ++this.generation;
     this.connecting = true;
+    this.robotEnabled$.next(null);
     this.connectionState$.next('connecting…');
     try {
       await this.openWebSocket(generation);
@@ -58,7 +60,7 @@ export class RobotService {
         if (!this.isCurrent(generation)) return;
         this.stopMedia();
         console.warn('Camera connection failed', error);
-        this.cameraError$.next('Camera unavailable; button and Space controls remain connected.');
+        this.cameraError$.next('Camera unavailable. Check camera access before starting an inspection.');
       });
     } catch (error) {
       if (generation !== this.generation) return;
@@ -156,6 +158,7 @@ export class RobotService {
         switch (msg.type) {
           case 'robot_config':
             this.robotDefaultIp$.next(msg.default_ip);
+            this.robotEnabled$.next(msg.robot_enabled !== false);
             break;
           case 'robot_state':
             this.robotState$.next(msg.state as RobotState);

@@ -24,10 +24,11 @@ from inventory import get_inventory
 
 
 async def health(request):
-    robot = get_controller()
+    robot = get_controller() if config.ROBOT_ENABLED else None
     return web.json_response({
         "status": "ok",
-        "robot_connected": robot.is_connected(),
+        "robot_connected": robot is not None and robot.is_connected(),
+        "robot_enabled": config.ROBOT_ENABLED,
         "mock": config.ROBOT_MOCK,
     })
 
@@ -139,7 +140,8 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     # Roboter früh initialisieren, damit Verbindungsfehler sofort sichtbar sind.
-    get_controller()
+    if config.ROBOT_ENABLED:
+        get_controller()
     app = create_app()
     print(f"[server] läuft auf http://{config.HOST}:{config.PORT}")
     web.run_app(app, host=config.HOST, port=config.PORT)

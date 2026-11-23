@@ -1,20 +1,20 @@
 <mat-toolbar color="primary" class="control-toolbar !h-auto flex-wrap gap-2 py-2">
-  <mat-icon>precision_manufacturing</mat-icon>
-  <span class="font-medium">{{ 'app.title' | translate }}</span>
+  <mat-icon>{{ robotEnabled ? "precision_manufacturing" : "document_scanner" }}</mat-icon>
+  <span class="font-medium">{{ robotEnabled ? ('app.title' | translate) : 'Manual label inspection' }}</span>
   <span class="flex-1"></span>
   <span class="flex items-center gap-2 text-sm">
     <span class="inline-block w-2.5 h-2.5 rounded-full"
           [style.background]="connected ? 'var(--ok)' : 'var(--danger)'"></span>
     {{ connectionState }}
   </span>
-  <span *ngIf="robot?.mock" class="text-xs font-bold px-2 py-0.5 rounded"
+  <span *ngIf="robotEnabled && robot?.mock" class="text-xs font-bold px-2 py-0.5 rounded"
         style="background: var(--warn); color: #231a00;">{{ 'status.sim' | translate }}</span>
   <button mat-flat-button (click)="toggleConnection()">
     <mat-icon>{{ connected ? 'link_off' : 'link' }}</mat-icon>
     {{ (connected || connectionState === 'connecting…' || connectionState === 'reconnecting…' ? 'status.disconnect' : 'status.connect') | translate }}
   </button>
-  <button mat-flat-button color="warn" (click)="estop()" [disabled]="!connected">
-    <mat-icon>pan_tool</mat-icon> {{ 'status.estop' | translate }}
+  <button mat-flat-button color="warn" (click)="estop()" [disabled]="!connected || (!robotEnabled && !cycleRunning)">
+    <mat-icon>pan_tool</mat-icon> {{ robotEnabled ? ('status.estop' | translate) : 'Cancel inspection' }}
   </button>
 </mat-toolbar>
 
@@ -23,11 +23,11 @@
 
     <!-- Kamera & Geste -->
     <mat-card appearance="outlined">
-      <mat-card-header><mat-card-title>{{ 'cam.title' | translate }}</mat-card-title></mat-card-header>
+      <mat-card-header><mat-card-title>{{ robotEnabled ? ('cam.title' | translate) : 'Camera' }}</mat-card-title></mat-card-header>
       <mat-card-content>
         <div class="video-wrap">
           <video #video autoplay playsinline muted></video>
-          <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" *ngIf="analysis">
+          <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" *ngIf="robotEnabled && analysis">
             <g *ngFor="let h of analysis.hands" class="hand">
               <line *ngFor="let l of handLines(h)"
                 [attr.x1]="l.x1" [attr.y1]="l.y1" [attr.x2]="l.x2" [attr.y2]="l.y2" />
@@ -49,7 +49,7 @@
           </svg>
         </div>
 
-        <div class="mt-3 p-3 rounded-lg" style="background: var(--panel-2);">
+        <div *ngIf="robotEnabled" class="mt-3 p-3 rounded-lg" style="background: var(--panel-2);">
           <div class="flex justify-between items-center text-sm mb-1">
             <span>{{ 'sim.robot' | translate }} <strong>{{ gAction }}</strong></span>
             <span style="color: var(--muted);" *ngIf="analysis">{{ analysis.fps.toFixed(0) }} FPS</span>
@@ -64,7 +64,7 @@
     <!-- Rechte Spalte -->
     <div class="flex flex-col gap-4">
 
-      <mat-card appearance="outlined">
+      <mat-card *ngIf="robotEnabled" appearance="outlined">
         <mat-card-header><mat-card-title>{{ 'robot.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
           <mat-button-toggle-group [value]="robotUseReal" (change)="robotUseReal = $event.value">
@@ -87,7 +87,7 @@
       <mat-card appearance="outlined">
         <mat-card-header><mat-card-title>{{ 'cycle.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
-          <div class="mb-3">
+          <div *ngIf="robotEnabled" class="mb-3">
             <p class="text-xs mb-1" style="color: var(--muted);">{{ 'control.title' | translate }}</p>
             <mat-button-toggle-group [value]="controlMode" (change)="setControlMode($event.value)" [disabled]="cycleRunning">
               <mat-button-toggle value="gesture"><mat-icon>back_hand</mat-icon> {{ 'control.gesture' | translate }}</mat-button-toggle>
@@ -101,7 +101,7 @@
                 <mat-option *ngFor="let p of partTypes" [value]="p">{{ p === 'auto' ? ('cycle.autoType' | translate) : p }}</mat-option>
               </mat-select>
             </mat-form-field>
-            <button mat-raised-button color="primary" (click)="startInspection()"
+            <button mat-raised-button color="primary" *ngIf="robotEnabled" (click)="startInspection()"
                     [disabled]="!connected || cycleRunning">
               <mat-icon>play_arrow</mat-icon> {{ 'cycle.start' | translate }}
             </button>
@@ -110,6 +110,17 @@
           <p class="text-xs mt-2" style="color: var(--muted);" *ngIf="partType === 'auto'">
             {{ 'cycle.autoHint' | translate }}
           </p>
+          <p *ngIf="robotEnabled === false && connected && !cycleRunning" class="mt-3">
+            Present the front of the part to the camera and press <kbd>Space</kbd>.
+          </p>
+          <div *ngIf="(robotEnabled === false ? latestResult : undefined) as result" class="inspection-result" aria-live="polite">
+            <h3>OCR result</h3>
+            <p>{{ result.type }} · {{ (result.status === 'identified' ? 'inventory.identified' : 'inventory.review') | translate }}</p>
+            <p *ngIf="result.manufacturer || result.model || result.capacity">
+              {{ result.manufacturer }} {{ result.model }} {{ result.capacity }}
+            </p>
+            <pre *ngIf="result.ocr_text?.trim()">{{ result.ocr_text }}</pre>
+          </div>
           <div *ngIf="inspection as ins" class="mt-3">
             <p *ngIf="ins.part_type && ins.part_type !== 'auto'" class="text-sm mb-2">
               {{ 'cycle.detectedType' | translate }}: {{ ins.part_type }}
@@ -124,7 +135,7 @@
               {{ 'cycle.error' | translate:{ error: ins.error } }}</p>
           </div>
 
-          <ol class="steps mt-3">
+          <ol *ngIf="robotEnabled" class="steps mt-3">
             <li *ngFor="let s of steps; let i = index" [attr.data-state]="stepState(i)">
               <mat-icon>{{ stepIcon(i) }}</mat-icon>
               <span>{{ i + 1 }}. {{ s | translate }}</span>
@@ -133,7 +144,7 @@
         </mat-card-content>
       </mat-card>
 
-      <mat-card appearance="outlined">
+      <mat-card *ngIf="robotEnabled" appearance="outlined">
         <mat-card-header><mat-card-title>{{ 'manual.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
           <p class="text-xs mb-2" style="color: var(--muted);">{{ 'manual.jog' | translate:{ speed: jogSpeed } }}</p>
@@ -164,7 +175,7 @@
         </mat-card-content>
       </mat-card>
 
-      <mat-card appearance="outlined">
+      <mat-card *ngIf="robotEnabled" appearance="outlined">
         <mat-card-header><mat-card-title>{{ 'telemetry.title' | translate }}</mat-card-title></mat-card-header>
         <mat-card-content>
           <ng-container *ngIf="robot; else noRobot">
@@ -244,5 +255,7 @@
   </mat-card>
 </div>
 
-<!-- Lighting is enabled by the backend only after arrival at an inspection pose. -->
-<div class="flash" [class.on]="flashOn" aria-hidden="true"></div>
+<div *ngIf="robotEnabled" class="flash" [class.on]="flashOn" aria-hidden="true"></div>
+<div *ngIf="capturePrompt as prompt" class="capture-prompt" [class.lit]="flashOn" role="status">
+  {{ prompt }}
+</div>

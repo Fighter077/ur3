@@ -29,9 +29,9 @@ from robot.inspection import get_cell
 pcs = set()
 
 # Optional (default aus): YOLO-Objekterkennung, z. B. "liegt ein Teil im Halter?".
-_objects = Detector() if config.OBJECTS_ENABLED else None
+_objects = Detector() if config.ROBOT_ENABLED and config.OBJECTS_ENABLED else None
 # Hände -> Trigger-Geste.
-_hands = HandDetector() if config.HANDS_ENABLED else None
+_hands = HandDetector() if config.ROBOT_ENABLED and config.HANDS_ENABLED else None
 
 
 async def offer(request: web.Request):
@@ -100,6 +100,8 @@ async def _process_frames(client_id: str, latest: asyncio.Queue):
             frame = await latest.get()
             img = frame.to_ndarray(format="bgr24")
             frames.set_frame(img)  # für die Inspektionssequenz
+            if not config.ROBOT_ENABLED:
+                continue
             now = time.time() * 1000
 
             gesture_triggered = False

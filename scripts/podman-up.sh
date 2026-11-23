@@ -32,6 +32,8 @@ echo "[podman] Starte Backend (host-network, für WebRTC/UDP)…"
 podman run -d --name ur3-backend \
   --network=host \
   --restart unless-stopped \
+  -e ROBOT_ENABLED="${ROBOT_ENABLED:-false}" \
+  -e MANUAL_SIDE_PREP_S="${MANUAL_SIDE_PREP_S:-2.0}" \
   -e ROBOT_MOCK="$ROBOT_MOCK" \
   -e ROBOT_IP="$ROBOT_IP" \
   -e INSPECT_FLIP_SPEED="${INSPECT_FLIP_SPEED:-0.15}" \

@@ -48,6 +48,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   connectionState = 'disconnected';
   connected = false;
+  robotEnabled: boolean | null = null;
   robot: RobotState | null = null;
   analysis: Analysis | null = null;
   inspection: InspectionState | null = null;
@@ -86,8 +87,12 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.svc.connectionState$.pipe(takeUntilDestroyed()).subscribe((s) => {
       this.connectionState = s;
       this.connected = s === 'connected';
-      if (this.connected) this.svc.setControlMode(this.controlMode);
-      else this.startPending = false;
+      if (this.connected && this.robotEnabled) this.svc.setControlMode(this.controlMode);
+      if (!this.connected) this.startPending = false;
+    });
+    this.svc.robotEnabled$.pipe(takeUntilDestroyed()).subscribe((enabled) => {
+      this.robotEnabled = enabled;
+      if (enabled && this.connected) this.svc.setControlMode(this.controlMode);
     });
     this.svc.robotState$.pipe(takeUntilDestroyed()).subscribe((r) => (this.robot = r));
     this.svc.robotDefaultIp$.pipe(takeUntilDestroyed()).subscribe((ip) => {
@@ -102,7 +107,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.svc.inventory$.pipe(takeUntilDestroyed()).subscribe((inv) => (this.inventory = inv));
     this.svc.ack$.pipe(takeUntilDestroyed()).subscribe((a) => this.onAck(a));
     this.svc.gestureTrigger$.pipe(takeUntilDestroyed()).subscribe(() => {
-      if (this.controlMode === 'gesture') this.startInspection('gesture');
+      if (this.robotEnabled && this.controlMode === 'gesture') this.startInspection('gesture');
     });
     this.svc.cameraError$.pipe(takeUntilDestroyed()).subscribe((message) => {
       this.snack.open(message, 'OK', { duration: 6000 });
@@ -203,7 +208,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   setControlMode(mode: 'gesture' | 'spacebar') {
     this.controlMode = mode;
-    this.svc.setControlMode(mode);
+    if (this.robotEnabled) this.svc.setControlMode(mode);
   }
 
   applyRobot() {
@@ -218,7 +223,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       this.svc.abortInspection();
       return;
     }
-    if (e.code !== 'Space' || this.controlMode !== 'spacebar') return;
+    if (e.code !== 'Space' || this.robotEnabled === null ||
+        (this.robotEnabled && this.controlMode !== 'spacebar')) return;
     if (e.target instanceof HTMLElement &&
         e.target.closest('input, textarea, select, button, [contenteditable="true"], [role="combobox"]')) return;
     e.preventDefault();
@@ -255,7 +261,9 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   startInspection(source: 'manual' | 'spacebar' | 'gesture' = 'manual') {
-    if (!this.connected || this.cycleRunning) return;
+    if (!this.connected || this.cycleRunning || this.robotEnabled === null ||
+        (!this.robotEnabled && source !== 'spacebar')) return;
+    this.flashSuppressed = false;
     this.startPending = true;
     if (!this.svc.startInspection(this.partType, source)) this.startPending = false;
   }
@@ -273,9 +281,22 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   stopJog() { this.svc.stopJog(); }
   get flashOn(): boolean {
     return this.connected && !this.flashSuppressed &&
-      this.robot !== null && !this.robot.moving &&
+      (this.robotEnabled === false || (this.robot !== null && !this.robot.moving)) &&
       this.inspection?.state === 'INSPECT' && this.inspection?.capture_active === true;
   }
+  get capturePrompt(): string | null {
+    if (!this.connected || this.robotEnabled !== false || this.flashSuppressed) return null;
+    if (this.inspection?.state === 'INSPECT') return this.inspection.step === 'front' ? 'FRONT' : 'BACK';
+    if (this.inspection?.state === 'READ') return 'Reading labels…';
+    return null;
+  }
+
+  get latestResult(): InventoryRecord | undefined {
+    const inspection = this.inspection;
+    if (this.startPending || inspection?.state !== 'DONE') return undefined;
+    return this.inventory.find((record) => record.id === inspection.record_id);
+  }
+
   estop() {
     this.flashSuppressed = true;
     this.svc.abortInspection();
