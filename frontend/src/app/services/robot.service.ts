@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject, Subject } from 'rxjs';
 import { BACKEND } from '../config';
-import { Analysis, InspectionState, InventoryRecord, RobotState } from '../interfaces';
+import { Analysis, ControlMode, HandoverObservation, InspectionSource, InspectionState, InventoryRecord, RobotState } from '../interfaces';
 
 /**
  * Eine Verbindung pro Client:
@@ -12,8 +12,14 @@ import { Analysis, InspectionState, InventoryRecord, RobotState } from '../inter
 export class RobotService {
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
+  private remotePeer: RTCPeerConnection | null = null;
+  private remoteSourceId: string | null = null;
+  private remoteTimeout: ReturnType<typeof setTimeout> | null = null;
   private localStream: MediaStream | null = null;
-  private clientId = crypto.randomUUID();
+  private clientId = crypto.randomUUID?.() ?? Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('');
   private stillTimer: any = null;
   private stillCanvas = document.createElement('canvas');
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -23,6 +29,7 @@ export class RobotService {
   private videoEl: HTMLVideoElement | null = null;
   private socketTimeout: ReturnType<typeof setTimeout> | null = null;
   private cancelSocketConnect: (() => void) | null = null;
+  private useNetworkCamera = false;
 
   connectionState$ = new BehaviorSubject<string>('disconnected');
   robotState$ = new BehaviorSubject<RobotState | null>(null);
@@ -33,10 +40,33 @@ export class RobotService {
   ack$ = new Subject<any>();
   gestureTrigger$ = new Subject<void>();
   cameraError$ = new Subject<string>();
+  remoteCameraAvailable$ = new BehaviorSubject(false);
+  remoteCameraStream$ = new BehaviorSubject<MediaStream | null>(null);
+  networkCameraReady$ = new BehaviorSubject(false);
+  networkCameraEnded$ = new Subject<void>();
+  cameraSelection$ = new Subject<boolean>();
+  controlMode$ = new Subject<ControlMode>();
+  handoverObservation$ = new Subject<HandoverObservation>();
+
+  selectCamera(useNetworkCamera: boolean): boolean {
+    if (!this.send({ action: 'select_camera', network: useNetworkCamera })) return false;
+    this.useNetworkCamera = useNetworkCamera;
+    this.analysis$.next(null);
+    return true;
+  }
 
   /** Absolute URL eines vom Backend ausgelieferten Label-Bildes (/data/...). */
   imageUrl(path: string | null | undefined): string | null {
     return path ? `${BACKEND.http}${path}` : null;
+  }
+
+  async getInterfaceQr(): Promise<{ url: string; png: string }> {
+    const response = await fetch(`${BACKEND.http}/interface-qr`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`QR code unavailable: ${response.status}`);
+    return response.json();
   }
 
   // ---------------- Verbindung ----------------
@@ -54,12 +84,7 @@ export class RobotService {
       if (!this.isCurrent(generation)) return;
       // Control/telemetry work even while camera permission is pending or denied.
       this.connectionState$.next('connected');
-      void this.startWebRTC(videoEl, generation).catch((error) => {
-        if (!this.isCurrent(generation)) return;
-        this.stopMedia();
-        console.warn('Camera connection failed', error);
-        this.cameraError$.next('Camera unavailable; button and Space controls remain connected.');
-      });
+      this.retryLocalCamera();
     } catch (error) {
       if (generation !== this.generation) return;
       this.closeTransport();
@@ -67,6 +92,19 @@ export class RobotService {
     } finally {
       if (generation === this.generation) this.connecting = false;
     }
+  }
+
+  retryLocalCamera() {
+    const generation = this.generation;
+    if (!this.videoEl || this.pc || !this.isCurrent(generation)) return;
+    const started = this.startWebRTC(this.videoEl, generation);
+    const peer = this.pc;
+    void started.catch((error) => {
+      if (!this.isCurrent(generation) || this.pc !== peer) return;
+      this.stopMedia();
+      console.warn('Camera connection failed', error);
+      this.cameraError$.next('Local camera unavailable. Robot controls remain connected.');
+    });
   }
 
   disconnect(videoEl?: HTMLVideoElement) {
@@ -116,6 +154,8 @@ export class RobotService {
     }
     this.ws?.close();
     this.ws = null;
+    this.useNetworkCamera = false;
+    this.setRemoteSource(null);
     this.robotState$.next(null);
     this.analysis$.next(null);
     this.inspection$.next(null);
@@ -156,12 +196,37 @@ export class RobotService {
         switch (msg.type) {
           case 'robot_config':
             this.robotDefaultIp$.next(msg.default_ip);
+            this.setRemoteSource(msg.remote_camera_id);
+            this.applyCameraSelection(msg.remote_camera_selected === true);
+            if (msg.control_mode === 'gesture' || msg.control_mode === 'spacebar' || msg.control_mode === 'handover') {
+              this.controlMode$.next(msg.control_mode);
+            }
+            break;
+          case 'control_mode':
+            this.controlMode$.next(msg.mode);
+            break;
+          case 'handover_observation':
+            this.handoverObservation$.next(msg);
+            break;
+          case 'camera_source':
+            this.setRemoteSource(msg.sourceId);
+            this.applyCameraSelection(msg.network === true);
+            break;
+          case 'camera_selection':
+            this.applyCameraSelection(msg.network === true);
+            break;
+          case 'network_camera_ended':
+            if (msg.sourceId === this.remoteSourceId && this.remotePeer?.connectionState === 'connected') {
+              this.failRemoteCamera(this.remotePeer);
+            }
             break;
           case 'robot_state':
             this.robotState$.next(msg.state as RobotState);
             break;
           case 'analysis':
-            this.analysis$.next(msg as Analysis);
+            if ((msg.network_camera === true) === this.useNetworkCamera) {
+              this.analysis$.next(msg as Analysis);
+            }
             break;
           case 'inspection':
             this.inspection$.next(msg as InspectionState);
@@ -173,7 +238,7 @@ export class RobotService {
             this.ack$.next(msg);
             break;
           case 'gesture_trigger':
-            this.gestureTrigger$.next();
+            if ((msg.network_camera === true) === this.useNetworkCamera) this.gestureTrigger$.next();
             break;
         }
       };
@@ -181,18 +246,19 @@ export class RobotService {
   }
 
   private async startWebRTC(videoEl: HTMLVideoElement, generation: number) {
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    });
+    const pc = new RTCPeerConnection();
     this.pc = pc;
     pc.onconnectionstatechange = () => {
-      if (this.isCurrent(generation) && pc.connectionState === 'failed') this.ws?.close();
+      if (this.isCurrent(generation) && pc.connectionState === 'failed') {
+        this.stopMedia();
+        this.cameraError$.next('Local camera connection failed.');
+      }
     };
 
     // Hohe Auflösung + Bitrate: der Text auf Bauteil-Labels ist klein -> für OCR zählt Schärfe,
     // nicht Framerate. Niedrige FPS lassen die Bitrate in Bildqualität fliessen.
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 15 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, frameRate: { ideal: 15 } },
     });
     if (!this.isCurrent(generation)) {
       stream.getTracks().forEach((track) => track.stop());
@@ -203,7 +269,8 @@ export class RobotService {
     videoEl.srcObject = stream;
     videoEl.play().catch(() => {});
 
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    const track = stream.getVideoTracks()[0];
+    pc.addTransceiver(track, { direction: 'sendonly', streams: [stream] });
 
     const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
     if (sender) {
@@ -216,27 +283,93 @@ export class RobotService {
     }
 
     if (!this.isCurrent(generation)) return;
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    if (!this.isCurrent(generation)) return;
-    const resp = await fetch(`${BACKEND.http}/offer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        clientId: this.clientId,
-        sdp: pc.localDescription?.sdp,
-        type: pc.localDescription?.type,
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) throw new Error(`Camera offer failed: ${resp.status}`);
-    const answer = await resp.json();
-    if (!this.isCurrent(generation)) return;
-    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    await this.negotiateCamera(pc, '/offer');
     if (!this.isCurrent(generation)) return;
 
     // Full-Res-Standbilder regelmässig ans Backend posten (scharf, unkomprimiert -> OCR).
     this.startStillCapture(videoEl);
+  }
+
+  private setRemoteSource(sourceId: unknown) {
+    const id = typeof sourceId === 'string' && sourceId ? sourceId : null;
+    if (id === this.remoteSourceId) return;
+    this.closeRemoteCamera();
+    this.applyCameraSelection(false);
+    if (this.remoteSourceId !== null) this.remoteCameraAvailable$.next(false);
+    this.remoteSourceId = id;
+    if (id !== null) {
+      this.remoteCameraAvailable$.next(true);
+      this.retryRemoteCamera();
+    }
+  }
+
+  private applyCameraSelection(network: boolean) {
+    if (this.useNetworkCamera === network) return;
+    this.useNetworkCamera = network;
+    this.analysis$.next(null);
+    this.cameraSelection$.next(network);
+  }
+
+  retryRemoteCamera() {
+    if (!this.remoteSourceId || this.remotePeer || !this.isCurrent(this.generation)) return;
+    const sourceId = this.remoteSourceId;
+    const pc = new RTCPeerConnection();
+    this.remotePeer = pc;
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.ontrack = ({ track, streams }) => {
+      if (this.remotePeer !== pc) return;
+      this.remoteCameraStream$.next(streams[0] ?? new MediaStream([track]));
+      track.onended = () => this.failRemoteCamera(pc);
+    };
+    pc.onconnectionstatechange = () => {
+      if (this.remotePeer !== pc) return;
+      if (pc.connectionState === 'connected') {
+        if (this.remoteTimeout !== null) clearTimeout(this.remoteTimeout);
+        this.remoteTimeout = null;
+        this.networkCameraReady$.next(true);
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        this.failRemoteCamera(pc);
+      }
+    };
+    this.remoteTimeout = setTimeout(() => this.failRemoteCamera(pc), 15000);
+    void this.negotiateCamera(pc, '/network-camera', sourceId).catch(() => this.failRemoteCamera(pc));
+  }
+
+  private failRemoteCamera(pc: RTCPeerConnection) {
+    if (this.remotePeer !== pc) return;
+    this.closeRemoteCamera();
+    this.networkCameraEnded$.next();
+  }
+
+  private closeRemoteCamera() {
+    if (this.remoteTimeout !== null) clearTimeout(this.remoteTimeout);
+    this.remoteTimeout = null;
+    const pc = this.remotePeer;
+    this.remotePeer = null;
+    pc?.close();
+    this.remoteCameraStream$.next(null);
+    this.networkCameraReady$.next(false);
+  }
+
+  private async negotiateCamera(pc: RTCPeerConnection, path: string, sourceId?: string) {
+    await pc.setLocalDescription(await pc.createOffer());
+    const deadline = Date.now() + 5000;
+    while (pc.iceGatheringState !== 'complete' && pc.signalingState !== 'closed' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (pc.signalingState === 'closed') return;
+    const response = await fetch(`${BACKEND.http}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: this.clientId, sourceId,
+        sdp: pc.localDescription?.sdp, type: pc.localDescription?.type,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) throw new Error(`Camera offer failed: ${response.status}`);
+    const answer = await response.json();
+    if (pc.connectionState !== 'closed') await pc.setRemoteDescription(answer);
   }
 
   /** Alle 600 ms ein Vollbild aus dem lokalen Video greifen und ans Backend posten. */
@@ -253,7 +386,7 @@ export class RobotService {
       this.stillCanvas.toBlob(
         (blob) => {
           if (!blob) return;
-          fetch(`${BACKEND.http}/snapshot`, {
+          fetch(`${BACKEND.http}/snapshot?clientId=${encodeURIComponent(this.clientId)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'image/jpeg' },
             body: blob,
@@ -308,7 +441,7 @@ export class RobotService {
   }
 
   // ---------------- Inspektion / Inventar ----------------
-  startInspection(partType: string, source: 'manual' | 'spacebar' | 'gesture' = 'manual') {
+  startInspection(partType: string, source: InspectionSource = 'manual') {
     return this.send({ action: 'start_inspection', part_type: partType, source });
   }
   abortInspection() {
@@ -323,7 +456,7 @@ export class RobotService {
   teachPose(name: string) {
     this.send({ action: 'teach_pose', name });
   }
-  setControlMode(mode: 'gesture' | 'spacebar') {
+  setControlMode(mode: ControlMode) {
     this.send({ action: 'set_control_mode', mode });
   }
   setRobot(mock: boolean, ip: string) {

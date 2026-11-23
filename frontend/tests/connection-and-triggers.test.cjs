@@ -6,8 +6,8 @@ const vm = require('node:vm');
 const path = require('node:path');
 const ts = require('typescript');
 
-function setup() {
-  const sockets = [], timers = new Map();
+function setup({ secure = true } = {}) {
+  const sockets = [], peers = [], requests = [], timers = new Map();
   let timerId = 0;
   class Socket {
     static OPEN = 1;
@@ -23,9 +23,28 @@ function setup() {
   const context = {
     exports: {}, console: { warn() {} },
     document: { createElement: () => ({}) },
-    crypto: { randomUUID: () => 'test-client' },
+    crypto: secure ? { randomUUID: () => 'test-client' } : { getRandomValues: (buffer) => buffer.fill(42) },
     WebSocket: Socket,
-    RTCPeerConnection: class { close() {} },
+    RTCPeerConnection: class {
+      iceGatheringState = 'complete';
+      connectionState = 'new';
+      signalingState = 'stable';
+      constructor() { peers.push(this); }
+      close() { this.connectionState = this.signalingState = 'closed'; }
+      addTransceiver(track, options) { this.transceiver = { track, ...options }; }
+      getSenders() { return []; }
+      async createOffer() { return { type: 'offer', sdp: 'test offer' }; }
+      async setLocalDescription(desc) { this.localDescription = desc; }
+      async setRemoteDescription(desc) { this.remoteDescription = desc; }
+    },
+    AbortSignal,
+    fetch: async (url, init) => {
+      if (url === 'http://backend/interface-qr') {
+        return { ok: true, json: async () => ({ url: 'https://192.0.2.10:8443/', png: 'test-png' }) };
+      }
+      requests.push({ url, payload: JSON.parse(init.body) });
+      return { ok: true, json: async () => ({ type: 'answer', sdp: 'test answer' }) };
+    },
     navigator: { mediaDevices: media },
     setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; },
     clearTimeout: (id) => timers.delete(id), setInterval: () => 0, clearInterval() {},
@@ -60,7 +79,7 @@ function setup() {
   const video = { srcObject: null, play: async () => {} };
   app.videoEl = { nativeElement: video };
   return {
-    service, app, video, sockets, timers, media,
+    service, app, video, sockets, peers, requests, timers, media,
     retry() {
       const entry = [...timers.entries()].find(([, t]) => t.delay === 1500);
       assert.ok(entry, 'A reconnect must be scheduled');
@@ -70,6 +89,18 @@ function setup() {
 }
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+
+test('QR button opens the dialog with the HTTPS address from the backend', async () => {
+  const { app } = setup();
+  let opened = false;
+  app.interfaceQrDialog = { nativeElement: { showModal() { opened = true; } } };
+  const request = app.showInterfaceQr();
+  assert.equal(opened, true);
+  assert.equal(app.interfaceQrLoading, true);
+  await request;
+  assert.equal(app.interfaceQrLoading, false);
+  assert.equal(app.interfaceQr?.url, 'https://192.0.2.10:8443/');
+});
 
 test('page load connects automatically; camera denial leaves controls connected', async () => {
   const h = setup();
@@ -81,7 +112,31 @@ test('page load connects automatically; camera denial leaves controls connected'
   await flush();
   assert.equal(h.service.connectionState$.value, 'connected');
   assert.equal(h.app.connected, true);
-  assert.equal(h.sockets[0].sent[0].action, 'set_control_mode');
+  assert.equal(h.sockets[0].sent.length, 0);
+  h.service.disconnect();
+});
+
+test('joining without a secure-context UUID still requests camera and reads current control mode', async () => {
+  const h = setup({ secure: false });
+  let permissionRequests = 0;
+  h.media.getUserMedia = async () => {
+    permissionRequests++;
+    throw new Error('No local camera');
+  };
+  h.app.ngAfterViewInit();
+  await flush();
+  h.sockets[0].open();
+  await flush();
+  assert.equal(h.app.connected, true);
+  assert.equal(h.sockets[0].sent.length, 0);
+  h.sockets[0].message({ type: 'robot_config', control_mode: 'spacebar' });
+  assert.equal(h.app.controlMode, 'spacebar');
+  h.sockets[0].close();
+  h.retry();
+  h.sockets[1].open();
+  await flush();
+  assert.equal(h.app.connected, true);
+  assert.equal(permissionRequests, 2);
   h.service.disconnect();
 });
 
@@ -103,6 +158,59 @@ test('backend loss reconnects once and resynchronizes control mode', async () =>
   h.service.disconnect();
 });
 
+test('second camera negotiates a receive-only WebRTC preview and switches analysis without reconnecting', async () => {
+  const h = setup();
+  let permissionRequests = 0;
+  h.media.getUserMedia = async () => {
+    permissionRequests++;
+    throw new Error('No local camera');
+  };
+  const pending = h.service.connect(h.video);
+  h.sockets[0].open();
+  await pending;
+  await flush();
+  h.sockets[0].message({ type: 'robot_config', remote_camera_id: null });
+  assert.equal(h.app.remoteCameraAvailable, false);
+  h.sockets[0].message({ type: 'camera_source', sourceId: 'other-browser' });
+  await new Promise(setImmediate);
+  assert.equal(h.app.remoteCameraAvailable, true);
+  assert.equal(h.app.connected, true);
+  assert.equal(permissionRequests, 1);
+  assert.equal(h.app.useNetworkCamera, false);
+  const peer = h.peers.at(-1);
+  assert.equal(peer.transceiver.direction, 'recvonly');
+  assert.deepEqual(h.requests.at(-1), {
+    url: 'http://backend/network-camera',
+    payload: { clientId: 'test-client', sourceId: 'other-browser', sdp: 'test offer', type: 'offer' },
+  });
+  assert.equal(peer.remoteDescription?.type, 'answer');
+  const stream = {};
+  peer.ontrack({ track: {}, streams: [stream] });
+  peer.connectionState = 'connected';
+  peer.onconnectionstatechange();
+  assert.equal(h.app.networkCameraReady, true);
+  assert.equal(h.app.remoteCameraStream, stream);
+
+  h.app.selectCamera(true);
+  assert.equal(h.app.useNetworkCamera, true);
+  assert.deepEqual(h.sockets[0].sent.at(-1), { action: 'select_camera', network: true });
+  h.sockets[0].message({ type: 'analysis', network_camera: false });
+  assert.equal(h.app.analysis, null);
+  h.sockets[0].message({ type: 'analysis', network_camera: true });
+  assert.equal(h.app.analysis.network_camera, true);
+
+  h.sockets[0].message({ type: 'camera_source', sourceId: null });
+  assert.equal(h.app.remoteCameraAvailable, false);
+  assert.equal(peer.connectionState, 'closed');
+  assert.equal(h.app.remoteCameraStream, null);
+  assert.equal(h.app.networkCameraAspectRatio, null);
+  assert.equal(h.app.useNetworkCamera, false);
+  assert.equal(h.app.connected, true);
+  assert.equal(h.sockets.length, 1);
+  assert.equal(permissionRequests, 1);
+  h.service.disconnect();
+});
+
 test('initial backend failure retries; intentional disconnect cancels retries', async () => {
   const h = setup();
   const pending = h.service.connect(h.video);
@@ -113,6 +221,28 @@ test('initial backend failure retries; intentional disconnect cancels retries', 
   h.service.disconnect();
   assert.equal(h.timers.size, 0);
   assert.equal(h.service.connectionState$.value, 'disconnected');
+});
+
+test('handover needs both observations and an explicit start in mock mode', async () => {
+  const h = setup();
+  const pending = h.service.connect(h.video);
+  const socket = h.sockets[0];
+  socket.open();
+  await pending;
+  h.app.setControlMode('handover');
+  socket.message({ type: 'robot_state', state: { mock: true } });
+  socket.message({ type: 'handover_observation', network_camera: false, hands: [], objects: [], ready: false });
+  h.app.startInspection('handover');
+  assert.equal(socket.sent.some((cmd) => cmd.action === 'start_inspection'), false);
+  socket.message({ type: 'handover_observation', network_camera: true, hands: [], objects: [], ready: true });
+  assert.equal(socket.sent.some((cmd) => cmd.action === 'start_inspection'), false);
+  socket.message({ type: 'robot_state', state: { mock: false } });
+  h.app.startInspection('handover');
+  assert.equal(socket.sent.some((cmd) => cmd.action === 'start_inspection'), false);
+  socket.message({ type: 'robot_state', state: { mock: true } });
+  h.app.startInspection('handover');
+  assert.deepEqual(socket.sent.at(-1), { action: 'start_inspection', part_type: 'auto', source: 'handover' });
+  h.service.disconnect();
 });
 
 test('camera permission resolving after disconnect stops the acquired tracks', async () => {

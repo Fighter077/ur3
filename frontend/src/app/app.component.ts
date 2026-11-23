@@ -18,7 +18,7 @@ import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { RobotService } from './services/robot.service';
-import { Analysis, Hand, InspectionState, InventoryRecord, RobotState, SimState } from './interfaces';
+import { Analysis, ControlMode, Hand, HandoverObservation, InspectionSource, InspectionState, InventoryRecord, RobotState, SimState } from './interfaces';
 
 // MediaPipe-Hand: Verbindungen der 21 Landmarks (Handgelenk + 5 Finger) für das Overlay.
 const HAND_EDGES: [number, number][] = [
@@ -45,9 +45,20 @@ const HAND_EDGES: [number, number][] = [
 })
 export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('video') videoEl!: ElementRef<HTMLVideoElement>;
+  @ViewChild('interfaceQrDialog') interfaceQrDialog!: ElementRef<HTMLDialogElement>;
+  interfaceQr: { url: string; png: string } | null = null;
+  interfaceQrLoading = false;
 
   connectionState = 'disconnected';
   connected = false;
+  useNetworkCamera = false;
+  remoteCameraAvailable = false;
+  remoteCameraStream: MediaStream | null = null;
+  localCameraFailed = false;
+  networkCameraReady = false;
+  localCameraAspectRatio: number | null = null;
+  networkCameraAspectRatio: number | null = null;
+  networkCameraFailed = false;
   robot: RobotState | null = null;
   analysis: Analysis | null = null;
   inspection: InspectionState | null = null;
@@ -55,7 +66,11 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   partTypes = ['auto', 'HDD', 'optical', 'RAM'];
   partType = 'auto';
-  controlMode: 'gesture' | 'spacebar' = 'gesture';
+  controlMode: ControlMode = 'gesture';
+  private controlModeEdited = false;
+  localHandover: HandoverObservation | null = null;
+  remoteHandover: HandoverObservation | null = null;
+  handoverReady = false;
   robotUseReal = false;              // false = Simulation (Mock), true = echter UR3e
   robotIp = '';
   robotIpEdited = false;
@@ -86,8 +101,15 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.svc.connectionState$.pipe(takeUntilDestroyed()).subscribe((s) => {
       this.connectionState = s;
       this.connected = s === 'connected';
-      if (this.connected) this.svc.setControlMode(this.controlMode);
-      else this.startPending = false;
+      if (this.connected) {
+        this.localCameraFailed = false;
+        this.networkCameraFailed = false;
+        if (this.controlModeEdited) this.svc.setControlMode(this.controlMode);
+      } else {
+        this.startPending = false;
+        this.useNetworkCamera = false;
+        this.clearHandover();
+      }
     });
     this.svc.robotState$.pipe(takeUntilDestroyed()).subscribe((r) => (this.robot = r));
     this.svc.robotDefaultIp$.pipe(takeUntilDestroyed()).subscribe((ip) => {
@@ -105,7 +127,40 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       if (this.controlMode === 'gesture') this.startInspection('gesture');
     });
     this.svc.cameraError$.pipe(takeUntilDestroyed()).subscribe((message) => {
+      this.localCameraFailed = true;
       this.snack.open(message, 'OK', { duration: 6000 });
+    });
+    this.svc.remoteCameraAvailable$.pipe(takeUntilDestroyed()).subscribe((available) => {
+      this.remoteCameraAvailable = available;
+      this.networkCameraFailed = false;
+      if (!available) {
+        this.clearHandover();
+        this.networkCameraReady = false;
+        this.networkCameraAspectRatio = null;
+      }
+    });
+    this.svc.networkCameraReady$.pipe(takeUntilDestroyed()).subscribe((ready) => {
+      this.networkCameraReady = ready;
+    });
+    this.svc.remoteCameraStream$.pipe(takeUntilDestroyed()).subscribe((stream) => {
+      this.remoteCameraStream = stream;
+      if (!stream) this.networkCameraAspectRatio = null;
+    });
+    this.svc.cameraSelection$.pipe(takeUntilDestroyed()).subscribe((network) => {
+      this.useNetworkCamera = network;
+    });
+    this.svc.controlMode$.pipe(takeUntilDestroyed()).subscribe((mode) => {
+      if (this.controlMode !== mode) this.clearHandover();
+      this.controlMode = mode;
+    });
+    this.svc.handoverObservation$.pipe(takeUntilDestroyed()).subscribe((observation) => {
+      if (this.controlMode !== 'handover') return;
+      if (observation.network_camera) this.remoteHandover = observation;
+      else this.localHandover = observation;
+      this.handoverReady = observation.ready;
+    });
+    this.svc.networkCameraEnded$.pipe(takeUntilDestroyed()).subscribe(() => {
+      if (this.remoteCameraAvailable) this.onNetworkCameraError();
     });
   }
 
@@ -201,7 +256,50 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  setControlMode(mode: 'gesture' | 'spacebar') {
+  async showInterfaceQr() {
+    this.interfaceQrDialog.nativeElement.showModal();
+    if (this.interfaceQrLoading) return;
+    this.interfaceQr = null;
+    this.interfaceQrLoading = true;
+    try {
+      this.interfaceQr = await this.svc.getInterfaceQr();
+    } catch {
+      this.interfaceQr = null;
+    } finally {
+      this.interfaceQrLoading = false;
+    }
+  }
+
+  retryRemoteCamera() {
+    this.networkCameraFailed = false;
+    this.svc.retryRemoteCamera();
+  }
+
+  retryLocalCamera() {
+    this.localCameraFailed = false;
+    this.svc.retryLocalCamera();
+  }
+
+  selectCamera(useNetworkCamera: boolean) {
+    if (this.svc.selectCamera(useNetworkCamera)) this.useNetworkCamera = useNetworkCamera;
+  }
+
+  onNetworkCameraError() {
+    if (this.networkCameraFailed) return;
+    this.networkCameraReady = false;
+    this.networkCameraFailed = true;
+    this.snack.open(this.t.instant('cam.networkError'), 'OK', { duration: 6000 });
+  }
+
+  private clearHandover() {
+    this.localHandover = null;
+    this.remoteHandover = null;
+    this.handoverReady = false;
+  }
+
+  setControlMode(mode: ControlMode) {
+    this.controlModeEdited = true;
+    if (this.controlMode !== mode) this.clearHandover();
     this.controlMode = mode;
     this.svc.setControlMode(mode);
   }
@@ -254,8 +352,9 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     return s === 'done' ? 'check_circle' : s === 'current' ? 'radio_button_checked' : 'radio_button_unchecked';
   }
 
-  startInspection(source: 'manual' | 'spacebar' | 'gesture' = 'manual') {
+  startInspection(source: InspectionSource = 'manual') {
     if (!this.connected || this.cycleRunning) return;
+    if (source === 'handover' && (!this.handoverReady || !this.robot?.mock)) return;
     this.startPending = true;
     if (!this.svc.startInspection(this.partType, source)) this.startPending = false;
   }

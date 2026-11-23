@@ -16,6 +16,12 @@ _latest: Optional[np.ndarray] = None       # aus dem WebRTC-Stream (komprimiert,
 _hires: Optional[np.ndarray] = None        # Full-Res-Standbild vom Client (unkomprimiert, scharf)
 
 
+def clear() -> None:
+    global _latest, _hires
+    with _lock:
+        _latest = _hires = None
+
+
 def set_frame(frame_bgr: np.ndarray) -> None:
     global _latest
     with _lock:

@@ -30,7 +30,7 @@ from config import config
 from inventory import get_inventory
 from part_types import detected_part_type
 from perception import get_reader
-from robot import get_controller
+from robot import MockController, get_controller
 
 PI = math.pi
 
@@ -125,6 +125,8 @@ class InspectionCell:
         part_type = part_type or "auto"
         if part_type != "auto" and part_type not in config.PART_TYPES:
             return {"ok": False, "error": f"Unknown part type: {part_type}"}
+        if source == "handover" and not isinstance(get_controller(), MockController):
+            return {"ok": False, "error": "Camera-guided handover is available in simulation only."}
         with self._lock:
             if self._running:
                 return {"ok": False, "error": "inspection already running"}
@@ -236,6 +238,10 @@ class InspectionCell:
         try:
             await self._set("PICK", "pick", part_type, 0.05)
             if source == "handover":
+                if not isinstance(robot, MockController):
+                    raise ValueError("Camera-guided handover is available in simulation only.")
+                self._ck()
+                await loop.run_in_executor(None, robot.set_gripper, True)
                 sim.set_state(mode="inspect", holding=True, opening=0.0, action="Teil übernommen")
                 await asyncio.sleep(config.STEP_PAUSE_S)
             else:

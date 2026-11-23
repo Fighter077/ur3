@@ -160,3 +160,33 @@ funktioniert, bevor die App ihn fährt.
 | Roboter fährt falsche Posen | TCP nicht/falsch gesetzt, oder Posen im Mock geteacht. Posen am echten Roboter neu teachen. |
 | Greifer reagiert nicht | falscher `GRIPPER_TYPE`/Pin; Robotiq-URCap nicht aktiv; Greifer am Pendant testen. |
 | OCR erkennt nichts | Label zu klein/unscharf/blendend; `front`-Pose näher, besseres Licht, `OCR_ATTEMPTS` erhöhen. |
+## Two-camera pose estimation prototype
+
+The accompanying [Ali et al. paper](Multi-View_Camera_Pose_Estimation_for_Robotic_Arm_.pdf)
+combines views from a single arm-mounted camera using known robot poses. For two fixed
+cameras, the offline prototype in `backend/perception/multiview_pose.py` triangulates known
+target features and fits their rigid geometry in the robot-base frame. It reports per-camera
+reprojection errors in pixels and the smallest triangulation angle. Small angles mean depth is
+weakly constrained, even if the reprojection errors are low.
+
+1. Calibrate each fixed camera at the operating resolution. Express the extrinsics in the same
+   robot-base frame. Use a calibration target with known positions in that frame to estimate
+   the transform from base coordinates into each camera.
+2. Capture both views while the part is stationary. Mark the same four or more non-collinear
+   points in both images. A rigid tag on the part gives points with known metric positions.
+   Use the original pixels and preserve the same point order across all three arrays.
+3. Supply a JSON file containing `target_points_m` (an array of `[x, y, z]` in the target
+   frame) and `cameras` (two entries). Each camera entry takes `intrinsics` (OpenCV's
+   3×3 camera matrix), `distortion`, `base_to_camera_rvec` (Rodrigues vector in radians),
+   `base_to_camera_translation_m` (3 values), and `image_points_px` (one `[u, v]` per target
+   point).
+
+Save the JSON as `backend/data/observations.json` to run it with the vision dependencies
+in the backend container.
+
+```bash
+podman exec ur3-backend python /app/perception/multiview_pose.py /app/data/observations.json
+```
+
+The result describes the target frame in robot-base coordinates. This tool takes recorded
+observations and has no robot-command connection.

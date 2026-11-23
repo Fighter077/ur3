@@ -1,0 +1,30 @@
+name: ur3-https
+
+services:
+  https:
+    image: docker.io/library/caddy:2
+    network_mode: host
+    environment:
+      CAMERA_HOST: ${CAMERA_HOST:-}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if [ -z "$$CAMERA_HOST" ]; then
+          # Routing lookup only. No packet is sent to this documentation address.
+          CAMERA_HOST=$$(ip -4 route get 192.0.2.1 2>/dev/null |
+            awk '{ for (i = 1; i < NF; i++) if ($$i == "src") { print $$(i+1); exit } }')
+        fi
+        if [ -z "$$CAMERA_HOST" ]; then
+          echo "Keine LAN-IP gefunden. Setze CAMERA_HOST in der .env." >&2
+          exit 1
+        fi
+        export CAMERA_HOST
+        echo "Handy-Kamera: https://$$CAMERA_HOST:8443"
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - camera_tls:/data
+    restart: unless-stopped
+
+volumes:
+  camera_tls:

@@ -20,6 +20,16 @@ export interface Detection {
   id?: number;
 }
 
+export type ControlMode = 'gesture' | 'spacebar' | 'handover';
+export type InspectionSource = 'manual' | ControlMode;
+
+export interface HandoverObservation {
+  network_camera: boolean;
+  hands: Hand[];
+  objects: Detection[];
+  ready: boolean;
+}
+
 export interface Hand {
   handedness: 'Left' | 'Right' | '?';
   score: number;

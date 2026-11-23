@@ -365,15 +365,8 @@ _current_ip = config.ROBOT_IP
 
 def get_controller() -> RobotController:
     """Prozessweiter Singleton-Controller gemäß Config (Mock vs. echt)."""
-    global _singleton
     if _singleton is None:
-        if config.ROBOT_MOCK:
-            print("[robot] MockController aktiv (ROBOT_MOCK=true).")
-            _singleton = MockController()
-        else:
-            print(f"[robot] Verbinde mit UR3e {config.ROBOT_IP} ...")
-            _singleton = RTDEController(config.ROBOT_IP)
-            print("[robot] Verbunden.")
+        set_controller(config.ROBOT_MOCK, config.ROBOT_IP)
     return _singleton
 
 
@@ -391,7 +384,10 @@ def set_controller(mock: bool, ip: Optional[str] = None) -> dict:
         else:
             print(f"[robot] Verbinde mit echtem UR3e {ip} ...")
             new = RTDEController(ip)
-            result = {"ok": True, "mock": False, "ip": ip, "connected": new.is_connected()}
+            if not new.is_connected():
+                new.close()
+                raise RobotError("Keine aktive RTDE-Verbindung.")
+            result = {"ok": True, "mock": False, "ip": ip, "connected": True}
             print("[robot] Verbunden.")
     except Exception as e:
         print(f"[robot] Verbindung zu {ip} fehlgeschlagen ({e}) -> Fallback Mock.")

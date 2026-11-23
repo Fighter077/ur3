@@ -8,8 +8,21 @@
     "estop": "E-STOP",
     "sim": "SIM"
   },
+  "share": {
+    "button": "Open on phone",
+    "title": "Scan to open the interface",
+    "loading": "Loading QR code…",
+    "unavailable": "QR code unavailable. Check that the HTTPS service is running.",
+    "close": "Close"
+  },
   "cam": {
-    "title": "Camera & Gesture"
+    "title": "Camera & Gesture",
+    "source": "Camera for gesture detection and inspection",
+    "local": "Local camera",
+    "network": "Second camera",
+    "retryLocal": "Start local camera",
+    "retry": "Retry second camera preview",
+    "networkError": "The second camera preview was interrupted."
   },
   "sim": {
     "robot": "Simulated robot:",
@@ -20,6 +33,13 @@
     "title": "Trigger",
     "gesture": "Gesture",
     "spacebar": "Spacebar"
+  },
+  "handover": {
+    "mode": "Handover",
+    "waiting": "Show the hand and component together in both cameras.",
+    "ready": "Hand and component detected in both cameras.",
+    "startMock": "Simulate handover",
+    "mockOnly": "Physical handover requires a calibrated pose and gripper feedback."
   },
   "robot": {
     "title": "Robot",

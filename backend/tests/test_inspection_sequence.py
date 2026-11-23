@@ -56,6 +56,7 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
             sim=SimpleNamespace(set_state=Mock(), READY=[0, 0]),
             frames=SimpleNamespace(best_for_ocr=lambda: "frame"),
             get_controller=lambda: self.robot, get_reader=lambda: self.reader,
+            MockController=Mock,
             get_inventory=lambda: inv,
             detected_part_type=detected_part_type,
         )
@@ -90,6 +91,16 @@ class SequenceTests(unittest.IsolatedAsyncioTestCase):
         if message.get("capture_active"):
             self.assertIsNone(self.pending, "Flash must wait for motion completion")
             self.events.append(("flash", list(self.current)))
+
+    async def test_mock_handover_closes_gripper_and_skips_holder(self):
+        await self.cell._run_cycle("HDD", "handover")
+        self.assertEqual(self.events[:2], [("grip", True), ("move", self.cell.poses["front"], None)])
+
+    def test_physical_handover_is_rejected_before_start(self):
+        self.ns["get_controller"] = lambda: object()
+        result = self.cell.start("HDD", "handover")
+        self.assertFalse(result["ok"])
+        self.assertIn("simulation only", result["error"])
 
     async def test_pick_capture_speed_and_clearance_order(self):
         await self.cell._run_cycle("HDD", "manual")

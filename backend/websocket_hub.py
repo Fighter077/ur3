@@ -13,7 +13,9 @@ from typing import Dict
 
 from aiohttp import web, WSMsgType
 
+import sim
 from config import config
+from camera_sources import remote_camera
 from robot import get_controller, set_controller, RobotError
 from robot.inspection import get_cell
 from inventory import get_inventory
@@ -31,16 +33,17 @@ async def broadcast(message: dict):
         return
     data = json.dumps(message)
     dead = []
-    for cid, ws in _connections.items():
+    for cid, ws in list(_connections.items()):
         if ws.closed:
-            dead.append(cid)
+            dead.append((cid, ws))
             continue
         try:
             await ws.send_str(data)
         except Exception:
-            dead.append(cid)
-    for cid in dead:
-        _connections.pop(cid, None)
+            dead.append((cid, ws))
+    for cid, ws in dead:
+        if _connections.get(cid) is ws:
+            _connections.pop(cid, None)
 
 
 async def send_to(client_id: str, message: dict):
@@ -49,10 +52,27 @@ async def send_to(client_id: str, message: dict):
         await ws.send_str(json.dumps(message))
 
 
+async def notify_camera_sources():
+    from rtc import active_camera_id
+
+    for client_id, ws in list(_connections.items()):
+        if ws.closed:
+            continue
+        source = remote_camera(client_id)
+        try:
+            await ws.send_json({
+                "type": "camera_source",
+                "sourceId": source.id if source else None,
+                "network": source is not None and source.id == active_camera_id(),
+            })
+        except ConnectionError:
+            pass
+
+
 # --------------------------------------------------------------------------- #
 # Befehls-Dispatch
 # --------------------------------------------------------------------------- #
-def _handle_command(cmd: dict) -> dict:
+def _handle_command(cmd: dict, handover_observation=None) -> dict:
     """Blockierender Robotercall -> in Executor ausgeführt. Gibt ein ack-dict zurück."""
     robot = get_controller()
     action = cmd.get("action")
@@ -85,8 +105,14 @@ def _handle_command(cmd: dict) -> dict:
         # --- Inspektion / Inventar ---
         elif action == "start_inspection":
             source = cmd.get("source", "manual")
-            if source not in ("manual", "spacebar", "gesture"):
+            if source not in ("manual", "spacebar", "gesture", "handover"):
                 raise RobotError("Unknown inspection trigger source")
+            if source == "handover" and (
+                sim.control_mode() != "handover"
+                or handover_observation is None
+                or not handover_observation.ready()
+            ):
+                raise RobotError("Hand and component must be visible in both cameras.")
             res = get_cell().start(cmd.get("part_type"), source=source)
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
         elif action == "abort_inspection":
@@ -96,9 +122,10 @@ def _handle_command(cmd: dict) -> dict:
             res = get_cell().teach_pose(cmd.get("name", ""))
             return {"type": "ack", "action": action, "ok": res.get("ok", False), "result": res}
         elif action == "set_control_mode":
-            import sim
             mode = cmd.get("mode", "gesture")
-            sim.set_gesture_enabled(mode == "gesture")
+            if mode not in ("gesture", "spacebar", "handover"):
+                raise RobotError("Unknown control mode.")
+            sim.set_control_mode(mode)
             return {"type": "ack", "action": action, "ok": True, "result": {"mode": mode}}
         elif action == "set_robot":
             res = set_controller(bool(cmd.get("mock", True)), cmd.get("ip"))
@@ -120,18 +147,28 @@ def _handle_command(cmd: dict) -> dict:
 
 
 async def ws_handler(request: web.Request):
+    from rtc import active_camera_id
+
     client_id = request.query.get("clientId")
     if not client_id:
         return web.Response(status=400, text="Missing clientId")
 
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
+    ws["client_id"] = client_id
     _connections[client_id] = ws
     print(f"[ws] verbunden: {client_id}")
 
     # Initialzustand an den neuen Client: Roboterkonfiguration, Inventar und Inspektionsstatus.
     try:
-        await ws.send_str(json.dumps({"type": "robot_config", "default_ip": config.ROBOT_IP}))
+        remote = remote_camera(client_id)
+        await ws.send_str(json.dumps({
+            "type": "robot_config",
+            "default_ip": config.ROBOT_IP,
+            "remote_camera_id": remote.id if remote else None,
+            "remote_camera_selected": remote is not None and remote.id == active_camera_id(),
+            "control_mode": sim.control_mode(),
+        }))
         await ws.send_str(json.dumps({"type": "inventory", "records": get_inventory().list_records()}))
         await ws.send_str(json.dumps({"type": "inspection", **get_cell().state()}))
     except Exception:
@@ -146,13 +183,30 @@ async def ws_handler(request: web.Request):
                 except json.JSONDecodeError:
                     await ws.send_str(json.dumps({"type": "error", "error": "invalid json"}))
                     continue
+                if cmd.get("action") == "select_camera":
+                    from rtc import select_camera
+
+                    network = cmd.get("network") is True
+                    await select_camera(ws, network, use_local=not network)
+                    remote = remote_camera(client_id)
+                    await ws.send_json({
+                        "type": "camera_selection",
+                        "network": remote is not None and remote.id == active_camera_id(),
+                    })
+                    continue
                 # Roboter-Call blockiert -> in Threadpool auslagern, Event-Loop frei halten
-                ack = await loop.run_in_executor(None, _handle_command, cmd)
+                ack = await loop.run_in_executor(None, _handle_command, cmd, ws.get("handover_observation"))
                 await ws.send_str(json.dumps(ack))
+                if ack.get("action") == "set_control_mode" and ack.get("ok"):
+                    mode = sim.control_mode()
+                    for peer in _connections.values():
+                        peer.pop("handover_observation", None)
+                    await broadcast({"type": "control_mode", "mode": mode})
             elif msg.type == WSMsgType.ERROR:
                 print(f"[ws] Fehler: {ws.exception()}")
     finally:
-        _connections.pop(client_id, None)
+        if _connections.get(client_id) is ws:
+            _connections.pop(client_id, None)
         print(f"[ws] getrennt: {client_id}")
     return ws
 

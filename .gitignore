@@ -19,3 +19,4 @@ frontend/.angular/
 
 # Env / lokale Overrides
 .env
+ur3-camera-root.crt

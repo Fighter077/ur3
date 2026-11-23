@@ -38,6 +38,7 @@ podman run -d --name ur3-backend \
   -e ROBOT_TCP_SPEED="${ROBOT_TCP_SPEED:-0.12}" \
   -e INSPECT_STILL_S="${INSPECT_STILL_S:-0.3}" \
   -e YOLO_DEVICE="$YOLO_DEVICE" \
+  -e OBJECTS_ENABLED="${OBJECTS_ENABLED:-false}" \
   -e YOLO_MODEL_PATH="$YOLO_MODEL_PATH" \
   -e PYTHONUNBUFFERED=1 \
   -v "$(pwd)/backend/models:/app/models:z" \

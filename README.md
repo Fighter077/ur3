@@ -94,7 +94,49 @@ Kamera, sicherer Erstlauf).
    - **Button**: Bauteiltyp wählen und **„Zyklus starten"** (entspricht dem Knopf im Poster).
 3. Der Datensatz erscheint im **Inventar**; `review`-Fälle lassen sich als geprüft markieren.
 
+### Handy als Netzwerkkamera
+
+Auf Handy und Rechner läuft dieselbe Webapp. Beide Browser können ihre lokale
+Kamera per WebRTC bereitstellen. Handy und Rechner müssen im selben Netzwerk sein.
+
+**Einmalig auf dem Rechner** den normalen Stack starten und den HTTPS-Zugang
+ergänzen. Das funktioniert auch mit dem Dev-Stack. Der HTTPS-Container ermittelt
+seine LAN-IP beim Start und schreibt die Adresse ins Log. Wenn etwa ein VPN oder
+eine zweite Netzwerkschnittstelle die falsche IP liefert, kannst du mit
+`CAMERA_HOST=192.168.1.10` in der `.env` die WLAN-IP vorgeben.
+
+```bash
+podman compose -f docker-compose.https.yml up -d
+podman compose -f docker-compose.https.yml logs https
+podman compose -f docker-compose.https.yml exec -T https \
+  cat /data/caddy/pki/authorities/local/root.crt > ur3-camera-root.crt
+```
+
+Das exportierte CA-Zertifikat einmal auf dem Handy als vertrauenswürdig installieren.
+Auf iOS nach der Profilinstallation auch unter **Einstellungen → Allgemein → Info →
+Zertifikatsvertrauenseinstellungen** volles Vertrauen für die CA aktivieren.
+
+**Bei der Benutzung** die Webapp am Rechner unter `http://localhost:4200` und am
+Handy über die HTTPS-Adresse aus dem Log öffnen oder am Rechner auf **Open on phone**
+klicken und den QR-Code scannen. Auf beiden Geräten den Kamerazugriff
+erlauben. Die Kamera aus dem jeweils anderen Browser erscheint als **Second camera**.
+Mit der Quellenauswahl lässt sich festlegen, welches Bild die Inspektion verwendet.
+Beim Schließen der Webapp verschwindet die zugehörige Vorschau.
+
+Die WebRTC-Aushandlung läuft über die Webapp. Die Videodaten laufen direkt per WebRTC
+zwischen den Browsern und dem Backend im Host-Netz. Die Netzwerkverbindung muss
+dafür auch UDP zum Backend-Rechner zulassen.
+
 ## Perzeption & Kamera
+
+- **Simulierte Übergabe**: `OBJECTS_ENABLED=true` in der `.env` setzen und
+  den Backend-Container neu erstellen. Desktop- und Handy-Kamera gleichzeitig verbinden
+  und **Handover** wählen. Die App markiert die als Smartphone erkannte Komponente in
+  beiden Ansichten. Wenn sie in beiden Bildern neben einer Hand stabil erkannt wird,
+  kann **Simulate handover** am Desktop den Mock-Greifer schließen und die Inspektion
+  starten. Die Bestätigung prüft die zwei Ansichten erneut auf Aktualität. Die Bildprüfung
+  dient der Simulation. Für die Hardware-Übergabe werden eine eingemessene Pose und eine
+  verlässliche Greifer-Rückmeldung benötigt.
 
 - **Geste** (MediaPipe HandLandmarker): rein als **Trigger**; der Roboter wird manuell/standalone
   gestartet (keine direkte Roboter-Software-Kopplung, wie im Poster).

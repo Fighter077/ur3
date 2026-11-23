@@ -43,7 +43,7 @@ class Detector:
             self.model = None
             self.enabled = False
 
-    def detect(self, frame_bgr) -> List[dict]:
+    def detect(self, frame_bgr, *, track: bool = True) -> List[dict]:
         """Liste normalisierter Detektionen:
         {class, confidence, bbox:[x1,y1,x2,y2] (0..1), cx, cy, id?, keypoints?}
 
@@ -57,10 +57,11 @@ class Detector:
         # tracker="bytetrack.yaml": ByteTrack nutzt KEINEN optischen Fluss. BoT-SORT (Default)
         # macht Bewegungskompensation per Lucas-Kanade und stürzt ab, sobald zwei Frames
         # unterschiedlich groß sind - genau das passiert bei WebRTC mit adaptiver Auflösung.
-        results = self.model.track(
+        infer = self.model.track if track else self.model.predict
+        tracking = {"persist": True, "tracker": "bytetrack.yaml"} if track else {}
+        results = infer(
             frame_bgr, conf=config.YOLO_CONF, iou=config.YOLO_IOU,
-            persist=True, tracker="bytetrack.yaml",
-            device=config.YOLO_DEVICE, verbose=False,
+            device=config.YOLO_DEVICE, verbose=False, **tracking,
         )
         out: List[dict] = []
         for res in results:

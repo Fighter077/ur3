@@ -2,25 +2,48 @@
 
 Routen:
   POST /offer            WebRTC-SDP-Austausch (Kamera -> Backend)
+  POST /network-camera   WebRTC-SDP-Austausch (Backend -> zweite Vorschau)
   GET  /ws?clientId=...  bidirektional: Telemetrie raus, Steuerbefehle rein
   GET  /health           Liveness + Roboterstatus
 """
 from __future__ import annotations
 
 import asyncio
+from base64 import b64encode
 import os
 import threading
 
 import aiohttp_cors
+from aiohttp import ClientError, ClientSession, ClientTimeout
 from aiohttp import web
 import numpy as np
 
 from config import config
-from rtc import offer, on_shutdown
+from rtc import camera_is_selected, network_camera, network_camera_active, offer, on_shutdown
 from websocket_hub import ws_handler, start_telemetry, stop_telemetry
-from robot import get_controller
+from robot import MockController, get_controller
 from robot.inspection import get_cell
 from inventory import get_inventory
+
+
+async def interface_qr(request):
+    import cv2
+
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=2)) as session:
+            async with session.get("http://127.0.0.1:8444/interface-url", allow_redirects=False) as response:
+                response.raise_for_status()
+                url = (await response.text()).strip()
+    except (ClientError, TimeoutError) as exc:
+        raise web.HTTPServiceUnavailable(text="HTTPS service unavailable.") from exc
+
+    modules = cv2.QRCodeEncoder_create().encode(url)
+    bordered = cv2.copyMakeBorder(modules, 4, 4, 4, 4, cv2.BORDER_CONSTANT, value=255)
+    image = cv2.resize(bordered, None, fx=8, fy=8, interpolation=cv2.INTER_NEAREST)
+    ok, png = cv2.imencode(".png", image)
+    if not ok:
+        raise web.HTTPInternalServerError(text="Could not encode QR image.")
+    return web.json_response({"url": url, "png": b64encode(png).decode("ascii")})
 
 
 async def health(request):
@@ -28,7 +51,7 @@ async def health(request):
     return web.json_response({
         "status": "ok",
         "robot_connected": robot.is_connected(),
-        "mock": config.ROBOT_MOCK,
+        "mock": isinstance(robot, MockController),
     })
 
 
@@ -48,7 +71,10 @@ async def snapshot(request):
     if img is None:
         return web.json_response({"ok": False}, status=400)
     import frames
-    frames.set_hires(img)
+    client_id = request.query.get("clientId")
+    selected = camera_is_selected(client_id, False) if client_id else not network_camera_active()
+    if selected:
+        frames.set_hires(img)
     return web.json_response({"ok": True, "shape": list(img.shape)})
 
 
@@ -125,8 +151,10 @@ def create_app() -> web.Application:
         )
     })
     cors.add(app.router.add_post("/offer", offer))
+    cors.add(app.router.add_post("/network-camera", network_camera))
     cors.add(app.router.add_get("/ws", ws_handler))
     cors.add(app.router.add_get("/health", health))
+    cors.add(app.router.add_get("/interface-qr", interface_qr))
     cors.add(app.router.add_post("/snapshot", snapshot))
     cors.add(app.router.add_get("/debug/ocr", debug_ocr))
 
@@ -138,7 +166,7 @@ def create_app() -> web.Application:
 
 
 if __name__ == "__main__":
-    # Roboter früh initialisieren, damit Verbindungsfehler sofort sichtbar sind.
+    # Roboter früh initialisieren. Bei Verbindungsfehlern startet die Simulation.
     get_controller()
     app = create_app()
     print(f"[server] läuft auf http://{config.HOST}:{config.PORT}")

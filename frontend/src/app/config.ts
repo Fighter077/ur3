@@ -3,8 +3,9 @@
 // Überschreibbar über window.__BACKEND__ (z. B. per index.html-Snippet oder Env-Injection).
 
 const host = (window as any).__BACKEND_HOST__ || `${location.hostname}:8080`;
+const secure = location.protocol === 'https:';
 
 export const BACKEND = {
-  http: `http://${host}`,
-  ws: `ws://${host}`,
+  http: secure ? `${location.origin}/api` : `http://${host}`,
+  ws: secure ? `wss://${location.host}/api` : `ws://${host}`,
 };

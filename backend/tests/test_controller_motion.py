@@ -2,10 +2,34 @@
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from robot.controller import RTDEController, RobotError
+from robot import controller
+
+
+class StartupConnectionTests(unittest.TestCase):
+    def test_failed_startup_keeps_backend_in_mock_and_allows_manual_retry(self):
+        ip = "192.0.2.10"
+        connected_robot = Mock()
+        connected_robot.is_connected.return_value = True
+        with (
+            patch.object(controller, "_singleton", None),
+            patch.object(controller, "_current_ip", ip),
+            patch.object(controller.config, "ROBOT_MOCK", False),
+            patch.object(controller.config, "ROBOT_IP", ip),
+            patch.object(controller, "RTDEController", side_effect=[
+                RobotError("robot unreachable"), connected_robot,
+            ]) as connect,
+        ):
+            fallback = controller.get_controller()
+            self.assertIsInstance(fallback, controller.MockController)
+            self.assertIs(controller.get_controller(), fallback)
+            connect.assert_called_once_with(ip)
+
+            self.assertTrue(controller.set_controller(mock=False)["ok"])
+            self.assertIs(controller.get_controller(), connected_robot)
 
 
 class MotionTests(unittest.TestCase):

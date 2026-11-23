@@ -50,19 +50,91 @@ class GestureTests(unittest.IsolatedAsyncioTestCase):
         async def execute(_executor, fn, *args):
             return fn(*args)
         run = definition("rtc.py", "_process_frames", {
+            "CameraSource": object,
+            "camera_is_selected": lambda client_id, network: not network,
+            "_objects": None,
             "asyncio": SimpleNamespace(get_running_loop=lambda: SimpleNamespace(run_in_executor=execute)),
             "time": time, "config": config, "GestureTrigger": trigger_class,
             "frames": SimpleNamespace(set_frame=Mock()),
-            "_perceive": lambda img: ([{"gesture": "open"}], []),
+            "_detect_latest": AsyncMock(side_effect=lambda source: (object(), time.monotonic(), [{"gesture": "open"}], [])),
             "get_cell": lambda: cell, "send_to": send, "MediaStreamError": EndStream,
             "sim": SimpleNamespace(gesture_enabled=lambda: True,
                                    update_idle=lambda hands: ({}, True, 1.0)),
         })
-        await run("client", Queue())
+        await run("client", Queue(), object())
         triggers = [c for c in send.call_args_list if c.args[1]["type"] == "gesture_trigger"]
         self.assertEqual(len(triggers), 1)
         self.assertEqual(triggers[0].args[0], "client")
         cell.start.assert_not_called()
+
+
+class HandoverTests(unittest.TestCase):
+    def test_requires_current_stable_hand_and_object_in_each_view(self):
+        clock = Mock(return_value=10.0)
+        observation_class = definition("perception/handover.py", "HandoverObservation", {
+            "monotonic": clock, "_PHONE_CLASSES": {"cell phone"},
+            "_MAX_AGE_S": 1.5, "_STABLE_SAMPLES": 3,
+        })
+        observation = observation_class()
+        hand = [{"landmarks": [[0.5, 0.5]]}]
+        distant_hand = [{"landmarks": [[0.0, 0.0]]}]
+        part = [{"class": "cell phone", "bbox": [0.4, 0.4, 0.6, 0.6]}]
+        for _ in range(3):
+            observation.update(False, hand, part)
+            observation.update(True, distant_hand, part)
+        self.assertFalse(observation.ready())
+        for _ in range(3):
+            observation.update(True, hand, part)
+        self.assertTrue(observation.ready())
+        clock.return_value += 2.0
+        self.assertFalse(observation.ready())
+
+
+class CameraSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_viewers_share_one_detection_and_skip_queued_frames(self):
+        now = Mock(return_value=2.0)
+        perceive = Mock(return_value=([], []))
+        async def execute(_executor, fn, *args):
+            await asyncio.sleep(0)
+            return fn(*args)
+        detect = definition("rtc.py", "_detect_latest", {
+            "CameraSource": object, "_perception_lock": asyncio.Lock(),
+            "asyncio": SimpleNamespace(get_running_loop=lambda: SimpleNamespace(run_in_executor=execute)),
+            "time": SimpleNamespace(monotonic=now),
+            "_perceive": perceive, "_DETECTION_INTERVAL_S": 0.1,
+        })
+        first = object()
+        source = SimpleNamespace(latest=first, updated_at=1.9, detection=None, next_detection_at=0)
+        local, relayed = await asyncio.gather(detect(source), detect(source))
+        self.assertIs(local, relayed)
+        perceive.assert_called_once_with(first)
+        source.latest = object()
+        self.assertIs(await detect(source), local)
+        newest = source.latest = object()
+        source.updated_at = 2.2
+        now.return_value = 2.3
+        self.assertEqual((await detect(source))[:2], (newest, 2.2))
+        self.assertEqual(perceive.call_count, 2)
+
+    async def test_discovery_excludes_local_track_and_closed_source_releases_viewer(self):
+        source_class = definition("camera_sources.py", "CameraSource", {
+            "asyncio": asyncio, "uuid4": lambda: SimpleNamespace(hex="published-track"), "MediaRelay": Mock,
+            "monotonic": time.monotonic,
+        })
+        first, second = source_class(Mock()), source_class(Mock())
+        camera = definition("camera_sources.py", "remote_camera", {
+            "CameraSource": source_class, "sources": {"laptop": first, "phone": second},
+        })
+        self.assertIs(camera("laptop"), second)
+        self.assertIs(camera("phone"), first)
+        frame = object()
+        second.update(frame)
+        self.assertIs(await second.next_frame(None), frame)
+        waiting = asyncio.create_task(second.next_frame(frame))
+        await asyncio.sleep(0)
+        self.assertFalse(waiting.done())
+        second.close()
+        self.assertIsNone(await waiting)
 
 
 if __name__ == "__main__":
